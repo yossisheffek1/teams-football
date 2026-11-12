@@ -209,6 +209,11 @@
   .stars button{width:22px;font-size:17px}
   .prow .ic{width:28px}
   .prow .nm{min-width:64px}
+  .hrow .ic{font-size:15px}
+  .ic.x.confirm{width:auto;padding:0 8px;background:#fdecea;font-size:13px;font-weight:700}
+  .hedit{border:2px solid var(--accent);border-radius:14px;padding:10px 12px;margin:8px 0;background:#f8fcf9}
+  .hedit-h{font-weight:800;margin-bottom:4px}
+  .hedit .stepper small{display:block;max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -249,7 +254,7 @@ const S = {
   tab: location.hash==="#teams" ? "teams" : location.hash==="#stats" ? "stats" : "list",
   showPaste:false, confirmReset:false, confirmCancel:false, copyText:null, busy:false,
   subSel:new Set(), showColors:false, showImg:null, showText:null,
-  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false, showGuest:false, confirmGuest:false
+  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false, showGuest:false, confirmGuest:false, editHist:null, histDraft:null, confirmDel:null, confirmResetHist:false
 };
 try{ S.promoted = JSON.parse(localStorage.getItem("promoted")||"[]"); }catch(e){}
 let dismissedSug=new Set(); try{ dismissedSug=new Set(JSON.parse(localStorage.getItem("dismissedSug")||"[]")); }catch(e){}
@@ -663,7 +668,37 @@ function closeMvp(){
   if(t.length>1 && t[0][1]===t[1][1]){ toast("תיקו! לחץ על שם כדי לבחור"); return; }
   setMvp(t[0][0]);
 }
-function deleteResult(id){ run(()=>deleteDoc(doc(db,"history",id)), "התוצאה נמחקה"); }
+function deleteResult(id){ if(S.editHist===id) S.editHist=null; run(()=>deleteDoc(doc(db,"history",id)), "הערב נמחק מהטבלה"); }
+async function resetHistory(){
+  const batch=writeBatch(db); S.history.forEach(g=>batch.delete(doc(db,"history",g.id)));
+  S.editHist=null; await run(()=>batch.commit(), "הטבלה אופסה");
+}
+function startEditHist(g){ S.editHist=g.id; S.histDraft={wins:(g.teams||[]).map(t=>t.wins||0), mvp:g.mvp||""}; render(); }
+function saveHist(g){
+  const d=S.histDraft;
+  const rec={...g, teams:(g.teams||[]).map((t,i)=>({...t, wins:d.wins[i]||0})), mvp:d.mvp||null};
+  delete rec.id;
+  S.editHist=null;
+  run(()=>setDoc(doc(db,"history",g.id), rec), "הערב עודכן ✔");
+}
+function histEditor(g){
+  const d=S.histDraft, names=(g.teams||[]).flatMap(t=>(t.players||[]).concat(t.subs||[]));
+  return h("div",{class:"hedit"},
+    h("div",{class:"hedit-h"},`✏️ עריכת הערב של ${fmtDate(g.date||g.at)}`),
+    (g.teams||[]).map((t,i)=>{ const c=COLORS[(t.color??0)%COLORS.length]; return h("div",{class:"stepper"},
+      h("div",{class:"lbl"},h("b",null,h("span",{class:"dot",style:`background:${c.c};margin-inline-end:6px`}),c.n),h("small",null,(t.players||[]).join(", "))),
+      h("div",{class:"ctrl"},
+        h("button",{onclick:()=>{ if(d.wins[i]>0){ d.wins[i]--; render(); } }},"−"),
+        h("output",null,d.wins[i]),
+        h("button",{onclick:()=>{ d.wins[i]++; render(); }},"+"))); }),
+    h("label",{class:"field"},h("span",null,"⭐ MVP"),
+      h("select",{class:"sel",style:"width:100%",onchange:e=>{d.mvp=e.target.value;}},
+        h("option",{value:""},"בלי MVP"),
+        [...new Set(names.concat(d.mvp?[d.mvp]:[]))].map(n=>{ const o=h("option",{value:n},n); if(d.mvp===n) o.selected=true; return o; }))),
+    h("div",{class:"share"},
+      h("button",{class:"btn ghost",onclick:()=>{S.editHist=null;render();}},"ביטול"),
+      h("button",{class:"btn",onclick:()=>saveHist(g)},"💾 שמור")));
+}
 function computeStats(){
   const m=new Map();
   for(const g of S.history){
@@ -1202,10 +1237,17 @@ function viewStats(){
     h("div",{class:"hint",style:"margin-top:8px"},"ניצחונות = כמה משחקים הקבוצה שלך ניצחה. 👑 = ערבים שהקבוצה שלך הייתה הכי טובה. ⭐ = MVP.")));
   out.push(h("div",{class:"card"},
     h("h2",null,"📜 משחקים קודמים"),
-    S.history.slice().reverse().map(g=>h("div",{class:"hrow"},
+    S.isAdmin ? h("div",{class:"hint",style:"margin-bottom:4px"},"✏️ לעריכת תוצאה או MVP · 🗑 למחיקת ערב (רק אתה רואה את הכפתורים)") : null,
+    S.history.slice().reverse().map(g=>S.editHist===g.id ? histEditor(g) : h("div",{class:"hrow"},
       h("span",{class:"hdate"},fmtDate(g.date||g.at)),
       h("span",{class:"hres"},(g.teams||[]).map(t=>{ const c=COLORS[(t.color??0)%COLORS.length]; return `${c.e} ${t.wins||0}`; }).join("  ")+(g.mvp?`   ⭐ ${g.mvp}`:"")),
-      S.isAdmin ? h("button",{class:"ic x",title:"מחק",onclick:()=>deleteResult(g.id)},"×") : null))));
+      S.isAdmin ? h("button",{class:"ic",title:"ערוך",onclick:()=>startEditHist(g)},"✏️") : null,
+      S.isAdmin ? h("button",{class:"ic x"+(S.confirmDel===g.id?" confirm":""),title:"מחק",onclick:()=>{
+        if(S.confirmDel!==g.id){ S.confirmDel=g.id; render(); setTimeout(()=>{ if(S.confirmDel===g.id){ S.confirmDel=null; render(); } },4000); return; }
+        S.confirmDel=null; deleteResult(g.id); }}, S.confirmDel===g.id?"מחק?":"🗑") : null)),
+    S.isAdmin ? h("button",{class:"btn warn full",style:"margin-top:14px",onclick:()=>{
+      if(!S.confirmResetHist){ S.confirmResetHist=true; render(); setTimeout(()=>{S.confirmResetHist=false;render();},4000); return; }
+      S.confirmResetHist=false; resetHistory(); }}, S.confirmResetHist?"בטוח? כל הטבלה תימחק. לחץ שוב":"🗑 אפס את כל הטבלה") : null));
   return out;
 }
 
