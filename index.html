@@ -113,7 +113,6 @@
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
   .copybox{margin-top:10px}
   .loading{text-align:center;color:var(--muted);padding:40px 0}
-
   .me{border-width:2px}
   .me.in{border-color:#86d19f;background:#f3fbf5}
   .me.waiting{border-color:#f1d29a;background:#fffaf0}
@@ -126,6 +125,32 @@
   .foot{text-align:center;margin-top:26px}
   .linkbtn.muted{color:var(--muted);font-weight:500;font-size:13px}
   .btn[disabled]{opacity:.6}
+  .stars button{width:26px;height:30px;font-size:18px}
+  .dot{display:inline-block;width:13px;height:13px;border-radius:50%;margin-inline-start:4px;border:1px solid rgba(0,0,0,.18);vertical-align:-2px}
+  .crow{padding:8px 0;border-top:1px solid var(--line)}
+  .clbl{font-size:14px;margin-bottom:6px}
+  .swatches{display:flex;flex-wrap:wrap;gap:6px}
+  .swatch{width:27px;height:27px;border-radius:50%;border:2px solid rgba(0,0,0,.14)}
+  .swatch.on{outline:3px solid var(--ink);outline-offset:2px}
+  .chip.on{background:var(--accent);color:#fff}
+  .subsel{margin-top:8px}
+  .team li.sub{background:#fff6e6;color:#7a5212}
+  .opt{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:12px;margin-top:12px}
+  .opt.mine{border:2px solid var(--accent)}
+  .opt .teams{margin-top:8px}
+  .opth{display:flex;align-items:center;gap:8px}
+  .opth b{font-size:18px;font-weight:800}
+  .opth small{color:var(--muted)}
+  .vcount{margin-inline-start:auto;background:#e7f3ea;color:var(--accent);font-weight:700;border-radius:20px;padding:3px 10px;font-size:13.5px}
+  .vbar{height:6px;background:var(--chip);border-radius:6px;margin-top:8px;overflow:hidden}
+  .vbar i{display:block;height:100%;background:var(--accent)}
+  .btn.chosen{background:#e7f3ea;color:var(--accent);box-shadow:inset 0 0 0 2px var(--accent)}
+  .banner{background:#eef6ff;color:#1d4f86;border-radius:12px;padding:11px 13px;margin-top:12px;font-weight:600;font-size:14.5px;line-height:1.5}
+  .banner.voting{background:#fff6e6;color:#7a5212}
+  .banner.final{background:#e7f3ea;color:#145233}
+  .votecall{display:block;width:100%;text-align:start;background:#fff6e6;border-color:#f1d29a}
+  .votecall b{display:block;font-size:17px}
+  .votecall span{color:#7a5212;font-size:14px}
 </style>
 </head>
 <body>
@@ -136,7 +161,7 @@
 </div>
 <div class="toast" id="toast"></div>
 <script type="module">
-// ====== הגדרות Firebase: להחליף בערכים מהפרויקט שלך ======
+// ====== הגדרות Firebase ======
 const firebaseConfig = {
   apiKey: "AIzaSyD_FM3NMjHcRcTnz2WIEgvBVkc8tdMiXu4",
   authDomain: "teams-football.firebaseapp.com",
@@ -145,22 +170,27 @@ const firebaseConfig = {
   messagingSenderId: "175983615125",
   appId: "1:175983615125:web:60a493fe62943970fbcf9c"
 };
-// ===========================================================
+// =============================
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import { getFirestore, doc, collection, onSnapshot, setDoc, addDoc, deleteDoc, getDoc, serverTimestamp, query, orderBy, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { getFirestore, doc, collection, onSnapshot, setDoc, addDoc, deleteDoc, getDoc, updateDoc, serverTimestamp, query, orderBy, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
-const DEF_CFG = {capacity:18, numTeams:3, open:true};
+const RATING_MAX = 7, DEF_RATING = 4;
 const COLORS = [
   {n:"כתומים", c:"#f97316", e:"🟠"}, {n:"כחולים", c:"#2563eb", e:"🔵"}, {n:"צהובים", c:"#facc15", e:"🟡"},
   {n:"ירוקים", c:"#16a34a", e:"🟢"}, {n:"אדומים", c:"#dc2626", e:"🔴"}, {n:"שחורים", c:"#1f2937", e:"⚫"},
-  {n:"לבנים", c:"#ffffff", e:"⚪"}, {n:"סגולים", c:"#7c3aed", e:"🟣"}
+  {n:"לבנים", c:"#ffffff", e:"⚪"}, {n:"סגולים", c:"#7c3aed", e:"🟣"}, {n:"ורודים", c:"#ec4899", e:"🩷"},
+  {n:"חומים", c:"#92400e", e:"🟤"}
 ];
+const DEF_CFG = {capacity:18, numTeams:3, open:true, colors:[0,1,2,3,4,5,6,7]};
+const OPT_NAMES = ["אופציה א׳","אופציה ב׳"];
 const S = {
-  cfg:{...DEF_CFG}, cfgExists:false, signups:[], ratings:[], teams:null,
+  cfg:{...DEF_CFG}, signups:[], ratings:[], teams:null, votes:[],
   uid:null, isAdmin:false, loading:true, error:null,
-  tab:"list", showPaste:false, confirmReset:false, confirmCancel:false, copyText:null, busy:false
+  tab: location.hash==="#teams" ? "teams" : "list",
+  showPaste:false, confirmReset:false, confirmCancel:false, copyText:null, busy:false,
+  subSel:new Set(), showColors:false
 };
 
 // ---------- utils ----------
@@ -188,42 +218,53 @@ function fmtTime(ms){
   const d=new Date(ms); const days=["א׳","ב׳","ג׳","ד׳","ה׳","ו׳","ש׳"];
   return "יום "+days[d.getDay()]+" "+String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");
 }
-function ratingOf(name){ const r = S.ratings.find(x=>norm(x.n)===norm(name)); return r ? r.r : 3; }
+function ratingOf(name){ const r = S.ratings.find(x=>norm(x.n)===norm(name)); return r ? r.r : DEF_RATING; }
+// palette index per team slot: unique, length k
+function colorSlots(k){
+  const src = Array.isArray(S.cfg.colors) ? S.cfg.colors : [];
+  const out=[], used=new Set();
+  for(let i=0;i<k;i++){ const c=src[i]; if(Number.isInteger(c) && c>=0 && c<COLORS.length && !used.has(c)){ out.push(c); used.add(c); } else out.push(null); }
+  for(let i=0;i<k;i++) if(out[i]==null){ let c=0; while(used.has(c)) c++; out[i]=c%COLORS.length; used.add(c); }
+  return out;
+}
+const colorOf = i => COLORS[colorSlots(Math.max(i+1, S.cfg.numTeams))[i]];
 const lsGet = k => { try{ return localStorage.getItem(k)||""; }catch(e){ return ""; } };
 const lsSet = (k,v) => { try{ localStorage.setItem(k,v); }catch(e){} };
 async function run(fn, okMsg){
-  try{ await fn(); if(okMsg) toast(okMsg); }
+  try{ await fn(); if(okMsg) toast(okMsg); return true; }
   catch(e){
     console.error(e);
-    if(e && e.code==="permission-denied") toast(S.isAdmin ? "אין הרשאה, בדוק את חוקי האבטחה" : (S.cfg.open ? "הפעולה נחסמה" : "ההרשמה סגורה כרגע"));
+    if(e && e.code==="permission-denied") toast(S.isAdmin ? "אין הרשאה, בדוק את חוקי האבטחה ב-Firebase" : "הפעולה לא אפשרית כרגע");
     else toast("משהו השתבש, נסה שוב");
+    return false;
   }
-}
-
-// ---------- setup check ----------
-if(Object.values(firebaseConfig).some(v=>String(v).includes("PASTE_HERE"))){
-  document.getElementById("main").replaceChildren(h("div",{class:"card"},
-    h("h2",null,"⚙️ צריך להשלים הגדרה"),
-    h("div",{class:"hint"},"חסרות הגדרות Firebase בראש הקובץ app. הדבק את firebaseConfig מהפרויקט שלך ונסה שוב.")));
-  throw new Error("missing firebase config");
 }
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 const cfgRef = doc(db,"config","main"), teamsRef = doc(db,"teams","current"), ratRef = doc(db,"ratings","main");
-const signCol = collection(db,"signups");
+const signCol = collection(db,"signups"), votesCol = collection(db,"votes");
 
 // ---------- data ----------
 let ratUnsub = null;
+function normTeams(d){
+  if(!d) return null;
+  if(Array.isArray(d.options) && d.options.length) return {at:d.at||0, options:d.options, status:d.status||"draft", chosen:d.chosen??null};
+  if(Array.isArray(d.teams) && d.teams.length) // older format
+    return {at:d.at||0, options:[{teams:d.teams.map(t=>({players:t.players||[], subs:t.subs||[]}))}], status:"final", chosen:0};
+  return null;
+}
 function subscribe(){
-  onSnapshot(cfgRef, s=>{ S.cfgExists=s.exists(); S.cfg = s.exists() ? {...DEF_CFG, ...s.data()} : {...DEF_CFG}; render(); }, e=>fail(e));
-  onSnapshot(teamsRef, s=>{ const d=s.exists()?s.data():null; S.teams = d && d.teams && d.teams.length ? d : null; render(); }, e=>fail(e));
+  onSnapshot(cfgRef, s=>{ S.cfg = s.exists() ? {...DEF_CFG, ...s.data()} : {...DEF_CFG}; render(); }, e=>fail(e));
+  onSnapshot(teamsRef, s=>{ S.teams = normTeams(s.exists()?s.data():null); render(); }, e=>fail(e));
   onSnapshot(query(signCol, orderBy("ts")), q=>{
     S.signups = q.docs.map(d=>{ const x=d.data({serverTimestamps:"estimate"}); return {id:d.id, name:x.name, uid:x.uid, ts:x.ts?x.ts.toMillis():Date.now(), tsRaw:x.ts}; })
       .sort((a,b)=>a.ts-b.ts);
+    const ids=new Set(S.signups.map(s=>s.id)); [...S.subSel].forEach(id=>{ if(!ids.has(id)) S.subSel.delete(id); });
     S.loading=false; S.error=null; render();
   }, e=>fail(e));
+  onSnapshot(votesCol, q=>{ S.votes=q.docs.map(d=>({id:d.id, ...d.data()})); render(); }, e=>console.warn("votes",e));
 }
 function fail(e){ console.error(e); S.loading=false; S.error="לא הצלחתי לטעון את הנתונים. בדוק חיבור לאינטרנט."; render(); }
 
@@ -239,7 +280,6 @@ async function checkAdmin(user){
   }
   render();
 }
-
 onAuthStateChanged(auth, async user=>{
   if(!user){ try{ await signInAnonymously(auth); }catch(e){ fail(e); } return; }
   S.uid = user.uid;
@@ -267,13 +307,18 @@ async function selfCancel(){
   const me=mySignup(); if(!me) return;
   await run(()=>deleteDoc(doc(db,"signups",me.id)), "ההרשמה בוטלה");
 }
+function roundVotes(){ return S.teams ? S.votes.filter(v=>v.round===S.teams.at && (v.choice===0||v.choice===1)) : []; }
+function myVote(){ const v=roundVotes().find(v=>v.id===S.uid); return v ? v.choice : null; }
+async function vote(choice){
+  if(!S.teams || S.teams.status!=="voting" || !S.uid) return;
+  await run(()=>setDoc(doc(db,"votes",S.uid), {choice, round:S.teams.at}), `הצבעת ל${OPT_NAMES[choice]} ✔`);
+}
 
 // ---------- admin actions ----------
 async function adminAdd(names){
   const have = new Set(S.signups.map(s=>norm(s.name)));
   const list=[], dup=[];
   for(const raw of names){ const n=clean(raw); if(!n) continue; if(have.has(norm(n))){dup.push(n);continue;} have.add(norm(n)); list.push(n); }
-  // add one by one so server timestamps keep the order
   for(const n of list) await run(()=>addDoc(signCol,{name:n, ts:serverTimestamp(), uid:"admin"}));
   if(list.length===1) toast(`${list[0]} נוסף`); else if(list.length>1) toast(`נוספו ${list.length} שחקנים`);
   if(dup.length) setTimeout(()=>toast(`כבר ברשימה: ${dup.join(", ")}`), list.length?1500:0);
@@ -299,6 +344,13 @@ async function adminMove(i,d){
 }
 let cfgChain=Promise.resolve();
 function setCfg(p){ const c={...S.cfg,...p}; S.cfg=c; render(); cfgChain=cfgChain.then(()=>run(()=>setDoc(cfgRef,c))); }
+function pickColor(slot, c){
+  const arr=colorSlots(Math.max(8, S.cfg.numTeams, slot+1));
+  const j=arr.indexOf(c);
+  if(j>=0 && j!==slot) arr[j]=arr[slot];   // swap so colors stay unique
+  arr[slot]=c;
+  setCfg({colors:arr});
+}
 let ratTimer;
 function setRating(name,r){
   S.ratings = S.ratings.filter(x=>norm(x.n)!==norm(name)).concat([{n:name,r}]); render();
@@ -308,7 +360,9 @@ function removeFromRoster(name){ S.ratings=S.ratings.filter(x=>norm(x.n)!==norm(
 async function newWeek(){
   const batch=writeBatch(db);
   S.signups.forEach(s=>batch.delete(doc(db,"signups",s.id)));
-  batch.set(teamsRef,{teams:[],at:0});
+  S.votes.forEach(v=>batch.delete(doc(db,"votes",v.id)));
+  batch.set(teamsRef,{options:[],at:0,status:"draft",chosen:null});
+  S.subSel.clear();
   await run(()=>batch.commit(),"התחלנו שבוע חדש ⚽");
 }
 
@@ -334,13 +388,44 @@ function balance(players,k){
   }
   return shuffle(teams).map(t=>t.map(p=>p.name).sort((x,y)=>x.localeCompare(y,"he")));
 }
+function buildOption(main, subs, k){
+  const r=new Map(main.concat(subs).map(p=>[p.name,p.r]));
+  const T=balance(main,k).map(ps=>({players:ps, subs:[]}));
+  const sum=t=>t.players.concat(t.subs).reduce((a,n)=>a+(r.get(n)||DEF_RATING),0);
+  subs.slice().sort((a,b)=>b.r-a.r).forEach(p=>{
+    let best=0;
+    T.forEach((t,i)=>{ const b=T[best]; if(t.subs.length<b.subs.length || (t.subs.length===b.subs.length && sum(t)<sum(b))) best=i; });
+    T[best].subs.push(p.name);
+  });
+  return {teams:T};
+}
+const canon = opt => opt.teams.map(t=>t.players.slice().sort().join("|")).sort().join("||");
 function makeTeams(){
-  const active=S.signups.slice(0,S.cfg.capacity);
+  const cap=S.cfg.capacity, active=S.signups.slice(0,cap);
   if(active.length<2){ toast("צריך לפחות 2 שחקנים ברשימה"); return; }
   const k=Math.min(S.cfg.numTeams,active.length);
-  const t={teams:balance(active.map(s=>({name:s.name,r:ratingOf(s.name)})),k).map((p,i)=>({color:i,players:p})), at:Date.now()};
+  const main=active.map(s=>({name:s.name,r:ratingOf(s.name)}));
+  const subs=S.signups.slice(cap).filter(s=>S.subSel.has(s.id)).map(s=>({name:s.name,r:ratingOf(s.name)}));
+  const a=buildOption(main,subs,k); let b=null;
+  for(let t=0;t<60 && !b;t++){ const c=buildOption(main,subs,k); if(canon(c)!==canon(a)) b=c; }
+  const t={at:Date.now(), options:b?[a,b]:[a], status:"draft", chosen:null};
   S.teams=t; render();
-  run(()=>setDoc(teamsRef,t),"הכוחות מוכנים ⚽");
+  run(()=>setDoc(teamsRef,t), b?"נוצרו 2 אופציות ⚽":"נוצרה אופציה אחת (אין מספיק שחקנים לשתיים)");
+}
+async function setStatus(status, chosen=null){
+  if(!S.teams) return;
+  S.teams={...S.teams, status, chosen}; render();
+  await run(()=>updateDoc(teamsRef,{status, chosen}),
+    status==="voting" ? "ההצבעה פתוחה 🗳️" : status==="final" ? `נבחרה ${OPT_NAMES[chosen]} ✔` : null);
+}
+function closeVoting(){
+  const v=roundVotes(), c0=v.filter(x=>x.choice===0).length, c1=v.filter(x=>x.choice===1).length;
+  if(c0===c1){ toast(c0? "תיקו! בחר ידנית את האופציה" : "אין עדיין הצבעות"); return; }
+  setStatus("final", c0>c1?0:1);
+}
+function optionStrength(opt){
+  const avgs=opt.teams.map(t=>t.players.reduce((a,n)=>a+ratingOf(n),0)/Math.max(1,t.players.length));
+  return {avgs, gap:Math.max(...avgs)-Math.min(...avgs)};
 }
 
 // ---------- share ----------
@@ -355,12 +440,14 @@ function listText(){
   return t.trim();
 }
 function inviteText(){ return `⚽ ההרשמה לכדורגל השבוע פתוחה!\n${S.cfg.capacity} מקומות, כל הקודם זוכה.\nנרשמים כאן: ${pageUrl()}`; }
-function teamsText(){
-  if(!S.teams) return "";
-  let t="⚽ הכוחות להשבוע\n";
-  S.teams.teams.forEach(tm=>{ const c=COLORS[tm.color%COLORS.length]; t+=`\n${c.e} ${c.n}: ${tm.players.join(", ")}`; });
-  return t;
+function optionLines(opt){
+  return opt.teams.map((tm,i)=>{ const c=colorOf(i); return `${c.e} ${c.n}: ${tm.players.join(", ")}`+(tm.subs&&tm.subs.length?` (מחליפים: ${tm.subs.join(", ")})`:""); }).join("\n");
 }
+function optionText(i){ return `⚽ ${OPT_NAMES[i]}\n\n${optionLines(S.teams.options[i])}`; }
+function voteText(){
+  return `🗳️ הצבעה על הכוחות להשבוע!\n\n`+S.teams.options.map((o,i)=>`*${OPT_NAMES[i]}*\n${optionLines(o)}`).join("\n\n")+`\n\nמצביעים כאן: ${pageUrl()}#teams`;
+}
+function finalText(){ const o=S.teams.options[S.teams.chosen??0]; return `⚽ הכוחות להשבוע\n\n${optionLines(o)}`; }
 async function copy(text){
   try{ await navigator.clipboard.writeText(text); toast("הועתק, אפשר להדביק בוואטסאפ"); S.copyText=null; render(); }
   catch(e){ S.copyText=text; render(); }
@@ -385,7 +472,8 @@ function render(){
       h("div",{class:"stat"},h("b",null,S.cfg.numTeams),h("span",null,"קבוצות"))),
     h("div",{class:"bar"},h("i",{style:`width:${cap?Math.min(100,inN/cap*100):0}%`})));
 
-  const tabs=[["list","רשימה"],["teams","כוחות"]];
+  const voting = S.teams && S.teams.status==="voting";
+  const tabs=[["list","רשימה"],["teams", voting && !S.isAdmin ? "כוחות 🗳️" : "כוחות"]];
   if(S.isAdmin) tabs.push(["players","שחקנים"],["settings","הגדרות"]);
   if(!tabs.find(t=>t[0]===S.tab)) S.tab="list";
   $("tabs").replaceChildren(...tabs.map(([k,l])=>h("button",{class:S.tab===k?"on":"",onclick:()=>{S.tab=k;S.copyText=null;S.confirmReset=false;render();}},l)));
@@ -444,6 +532,9 @@ function rowFor(s,i,isWait){
 function viewList(){
   const cap=S.cfg.capacity, out=[];
   if(S.error) out.push(h("div",{class:"note"},S.error));
+  if(S.teams && S.teams.status==="voting" && !S.isAdmin)
+    out.push(h("button",{class:"card votecall",onclick:()=>{S.tab="teams";render();}},
+      h("b",null,"🗳️ יש הצבעה על הכוחות!"), h("span",null, myVote()==null ? "לחץ כאן כדי להצביע" : `הצבעת ל${OPT_NAMES[myVote()]} · לחץ לצפייה`)));
   out.push(myCard());
   if(S.isAdmin){
     const inp=h("input",{id:"addName",placeholder:"הוספת שחקן ידנית",autocomplete:"off",
@@ -473,27 +564,95 @@ function viewList(){
   return out;
 }
 
+// --- teams view ---
+function teamCard(tm,i,showPow){
+  const c=colorOf(i);
+  const pow=showPow ? tm.players.reduce((a,n)=>a+ratingOf(n),0)/Math.max(1,tm.players.length) : null;
+  return h("div",{class:"team",style:`border-top:5px solid ${c.c==="#ffffff"?"#d1d5db":c.c}`},
+    h("div",{class:"th"},h("span",{class:"sw",style:`background:${c.c}`}),c.n,
+      h("small",null,`${tm.players.length} שחקנים`+(pow!=null?` · כוח ${pow.toFixed(1)}`:""))),
+    h("ul",null,tm.players.map(p=>h("li",null,p)),
+      (tm.subs||[]).map(p=>h("li",{class:"sub"},"🔄 "+p))));
+}
+function optionBlock(opt, idx, mode){
+  // mode: admin | vote
+  const v=roundVotes(), cnt=v.filter(x=>x.choice===idx).length, total=v.length;
+  const voting=S.teams.status==="voting", mine=myVote()===idx;
+  const st=S.isAdmin?optionStrength(opt):null;
+  return h("div",{class:"opt"+(mine?" mine":"")},
+    S.teams.options.length>1 ? h("div",{class:"opth"},
+      h("b",null,OPT_NAMES[idx]),
+      st ? h("small",null,`פער כוח ${st.gap.toFixed(2)}`) : null,
+      voting ? h("span",{class:"vcount"},cnt===1?"קול אחד":`${cnt} קולות`) : null) : null,
+    voting && total ? h("div",{class:"vbar"},h("i",{style:`width:${cnt/total*100}%`})) : null,
+    h("div",{class:"teams"},opt.teams.map((tm,i)=>teamCard(tm,i,S.isAdmin))),
+    mode==="vote" ? h("button",{class:"btn full big"+(mine?" chosen":""),style:"margin-top:10px",onclick:()=>vote(idx)}, mine?`✔ הצבעת ל${OPT_NAMES[idx]}`:`אני בעד ${OPT_NAMES[idx]}`) : null,
+    mode==="admin" ? h("div",null,
+      S.teams.options.length>1 ? h("div",{class:"hint",style:"margin-top:10px"},"שליחת האופציה הזו בנפרד:") : null,
+      S.teams.options.length>1 ? shareRow(optionText(idx)) : null,
+      h("button",{class:"btn full",style:"margin-top:8px",onclick:()=>setStatus("final",idx)}, S.teams.options.length>1?`✔ קבע את ${OPT_NAMES[idx]}`:"✔ קבע את החלוקה")) : null);
+}
+function splitControls(){
+  const cap=S.cfg.capacity, active=S.signups.slice(0,cap), waiting=S.signups.slice(cap);
+  const k=Math.min(S.cfg.numTeams,Math.max(1,active.length)), sz=sizesFor(active.length,k);
+  const slots=colorSlots(S.cfg.numTeams);
+  const subsN=waiting.filter(s=>S.subSel.has(s.id)).length;
+  return h("div",{class:"card"},
+    h("h2",null,"🎲 חלוקת כוחות"),
+    h("div",{class:"hint"},active.length?`${active.length} שחקנים ל-${k} קבוצות (${[...new Set(sz)].sort((a,b)=>b-a).join(" / ")} בקבוצה)`+(subsN?` + ${subsN} מחליפים`:"")+". יתקבלו 2 אופציות מאוזנות לפי הדירוגים.":"אין עדיין שחקנים ברשימה."),
+    h("button",{class:"linkbtn",onclick:()=>{S.showColors=!S.showColors;render();}},
+      S.showColors?"סגור צבעים":"🎨 צבעי הקבוצות ", !S.showColors ? slots.map(c=>h("span",{class:"dot",style:`background:${COLORS[c].c}`})) : null),
+    S.showColors ? h("div",{class:"colors"}, slots.map((cur,slot)=>h("div",{class:"crow"},
+      h("div",{class:"clbl"},`קבוצה ${slot+1}: `,h("b",null,COLORS[cur].n)),
+      h("div",{class:"swatches"},COLORS.map((col,ci)=>h("button",{class:"swatch"+(ci===cur?" on":""),"aria-label":col.n,style:`background:${col.c}`,onclick:()=>pickColor(slot,ci)})))))) : null,
+    waiting.length ? h("div",{class:"subsel"},
+      h("div",{class:"hint"},"🔄 לצרף מרשימת ההמתנה כמחליפים? (לחץ לסימון)"),
+      h("div",{class:"chips"},waiting.map(s=>h("button",{class:"chip"+(S.subSel.has(s.id)?" on":""),onclick:()=>{ S.subSel.has(s.id)?S.subSel.delete(s.id):S.subSel.add(s.id); render(); }},(S.subSel.has(s.id)?"✔ ":"")+s.name)))) : null,
+    h("button",{class:"btn full big",style:"margin-top:12px",onclick:makeTeams},S.teams?"🔄 צור אופציות חדשות":"⚽ צור 2 אופציות לכוחות"));
+}
 function viewTeams(){
-  const out=[], cap=S.cfg.capacity, active=S.signups.slice(0,cap);
+  const out=[], T=S.teams, cap=S.cfg.capacity, active=S.signups.slice(0,cap);
+  if(S.isAdmin) out.push(splitControls());
+  const visible = T && (S.isAdmin || T.status!=="draft");
+  if(!visible){ out.push(h("div",{class:"card"},h("div",{class:"empty"},"הכוחות עוד לא חולקו השבוע"))); return out; }
+
   if(S.isAdmin){
-    const k=Math.min(S.cfg.numTeams,Math.max(1,active.length)), sz=sizesFor(active.length,k);
-    out.push(h("div",{class:"card"},
-      h("h2",null,"🎲 חלוקת כוחות"),
-      h("div",{class:"hint"},active.length?`${active.length} שחקנים ל-${k} קבוצות (${[...new Set(sz)].sort((a,b)=>b-a).join(" / ")} בקבוצה), לפי הדירוגים בלשונית ״שחקנים״.`:"אין עדיין שחקנים ברשימה."),
-      h("button",{class:"btn full big",style:"margin-top:12px",onclick:makeTeams},S.teams?"🔄 חלק מחדש":"⚽ חלק לקבוצות")));
+    const shown = T.status==="final" ? [T.options[T.chosen??0]] : T.options;
+    const names=new Set(active.map(s=>norm(s.name)));
+    const stale = shown.some(o=>{ const p=o.teams.flatMap(t=>t.players.map(norm)); return p.length!==names.size || p.some(n=>!names.has(n)); });
+    if(stale) out.push(h("div",{class:"stale"},"⚠️ הרשימה השתנתה מאז החלוקה. לחץ ״צור אופציות חדשות״ לעדכון."));
   }
-  if(!S.teams){ out.push(h("div",{class:"card"},h("div",{class:"empty"},"הכוחות עוד לא חולקו השבוע"))); return out; }
-  const names=new Set(active.map(s=>norm(s.name))), inTeams=S.teams.teams.flatMap(t=>t.players.map(norm));
-  if(S.isAdmin && (inTeams.length!==names.size || inTeams.some(n=>!names.has(n))))
-    out.push(h("div",{class:"stale"},"⚠️ הרשימה השתנתה מאז החלוקה. לחץ ״חלק מחדש״ לעדכון."));
-  out.push(h("div",{class:"teams"},S.teams.teams.map(tm=>{
-    const c=COLORS[tm.color%COLORS.length];
-    const pow=S.isAdmin?tm.players.reduce((a,n)=>a+ratingOf(n),0)/tm.players.length:null;
-    return h("div",{class:"team",style:`border-top:5px solid ${c.c==="#ffffff"?"#d1d5db":c.c}`},
-      h("div",{class:"th"},h("span",{class:"sw",style:`background:${c.c}`}),c.n,h("small",null,`${tm.players.length} שחקנים`+(pow!=null?` · כוח ${pow.toFixed(1)}`:""))),
-      h("ul",null,tm.players.map(p=>h("li",null,p))));
-  })));
-  if(S.isAdmin) out.push(h("div",{class:"card"},h("h2",null,"📤 שליחת הכוחות"),shareRow(teamsText())));
+
+  if(T.status==="final"){
+    const idx=T.chosen??0;
+    out.push(h("div",{class:"banner final"},"✅ אלה הכוחות להשבוע"+(T.options.length>1?` (${OPT_NAMES[idx]})`:"")));
+    out.push(h("div",{class:"teams"},T.options[idx].teams.map((tm,i)=>teamCard(tm,i,S.isAdmin))));
+    if(S.isAdmin) out.push(h("div",{class:"card"},h("h2",null,"📤 שליחת הכוחות"),shareRow(finalText()),
+      T.options.length>1 ? h("button",{class:"linkbtn",onclick:()=>setStatus("draft")},"↩ חזור לשתי האופציות") : null));
+    return out;
+  }
+
+  if(T.status==="voting"){
+    const v=roundVotes();
+    out.push(h("div",{class:"banner voting"},
+      S.isAdmin ? `🗳️ ההצבעה פתוחה · ${v.length} הצביעו` : (myVote()==null ? "🗳️ איזה כוחות אתה מעדיף? בחר אופציה" : `🗳️ הצבעת ל${OPT_NAMES[myVote()]}. אפשר לשנות עד סגירת ההצבעה.`)));
+    T.options.forEach((o,i)=>out.push(optionBlock(o,i, S.isAdmin?"admin":"vote")));
+    if(S.isAdmin) out.push(h("div",{class:"card"},
+      h("h2",null,"🗳️ ניהול ההצבעה"),
+      h("div",{class:"hint"},"שלח לקבוצה את שתי האופציות עם קישור להצבעה:"),
+      shareRow(voteText()),
+      h("button",{class:"btn full",style:"margin-top:10px",onclick:closeVoting},"סגור הצבעה וקבע את המנצחת"),
+      h("button",{class:"linkbtn",onclick:()=>setStatus("draft")},"בטל הצבעה")));
+    return out;
+  }
+
+  // draft (admin only)
+  out.push(h("div",{class:"banner"}, T.options.length>1 ? "👀 רק אתה רואה את האופציות. בחר אחת, או פתח הצבעה לשחקנים." : "👀 רק אתה רואה את החלוקה. קבע אותה כדי שכולם יראו."));
+  T.options.forEach((o,i)=>out.push(optionBlock(o,i,"admin")));
+  if(T.options.length>1) out.push(h("div",{class:"card"},
+    h("h2",null,"🗳️ הצבעה"),
+    h("div",{class:"hint"},"השחקנים יראו את שתי האופציות באפליקציה ויוכלו להצביע. כל טלפון מצביע פעם אחת."),
+    h("button",{class:"btn full big",style:"margin-top:10px",onclick:()=>setStatus("voting")},"🗳️ פתח הצבעה לשחקנים")));
   return out;
 }
 
@@ -503,18 +662,18 @@ function viewPlayers(){
   S.signups.forEach(s=>{ if(!all.has(norm(s.name))) all.set(norm(s.name),s.name); });
   const names=[...all.values()].sort((a,b)=>a.localeCompare(b,"he"));
   const inp=h("input",{id:"rosterName",placeholder:"הוסף שחקן קבוע",autocomplete:"off",
-    onkeydown:e=>{ if(e.key==="Enter"&&e.target.value.trim()){ setRating(clean(e.target.value),3); e.target.value=""; } }});
+    onkeydown:e=>{ if(e.key==="Enter"&&e.target.value.trim()){ setRating(clean(e.target.value),DEF_RATING); e.target.value=""; } }});
   return [
     h("div",{class:"card"},
       h("h2",null,"⭐ דירוג שחקנים"),
-      h("div",{class:"hint"},"הדירוג (1 עד 5) משמש רק לאיזון הקבוצות, ורק אתה רואה אותו. שחקן בלי דירוג נחשב 3."),
-      h("div",{class:"addrow",style:"margin-top:10px"},inp,h("button",{class:"btn",onclick:()=>{ if(inp.value.trim()){ setRating(clean(inp.value),3); inp.value=""; } }},"הוסף"))),
+      h("div",{class:"hint"},`הדירוג (1 עד ${RATING_MAX}) משמש רק לאיזון הקבוצות, ורק אתה רואה אותו. שחקן בלי דירוג נחשב ${DEF_RATING}.`),
+      h("div",{class:"addrow",style:"margin-top:10px"},inp,h("button",{class:"btn",onclick:()=>{ if(inp.value.trim()){ setRating(clean(inp.value),DEF_RATING); inp.value=""; } }},"הוסף"))),
     h("div",{class:"card"},
       names.length ? h("div",null,names.map(n=>{
         const r=S.ratings.find(x=>norm(x.n)===norm(n)), val=r?r.r:0;
         return h("div",{class:"prow"},
-          h("div",{class:"nm"},h("b",null,n),!r?h("small",{class:"unr"},"לא דורג"):null),
-          h("div",{class:"stars"},[1,2,3,4,5].map(i=>h("button",{class:i<=val?"on":"","aria-label":`${i} כוכבים`,onclick:()=>setRating(n,i)},"★"))),
+          h("div",{class:"nm"},h("b",null,n),h("small",{class:"unr"}, r?`דירוג ${val}`:"לא דורג")),
+          h("div",{class:"stars"},Array.from({length:RATING_MAX},(_,k)=>k+1).map(i=>h("button",{class:i<=val?"on":"","aria-label":String(i),onclick:()=>setRating(n,i)},"★"))),
           r?h("button",{class:"ic x",title:"הסר מהקבועים",onclick:()=>removeFromRoster(n)},"×"):h("span",{style:"width:32px"}));
       })) : h("div",{class:"empty"},"אין עדיין שחקנים."))
   ];
@@ -541,7 +700,7 @@ function viewSettings(){
       h("div",{class:"chips"},[[18,3],[12,2],[15,3],[20,4]].map(([a,b])=>h("button",{class:"chip",onclick:()=>setCfg({capacity:a,numTeams:b})},`${a} · ${b} קבוצות`)))),
     h("div",{class:"card"},
       h("h2",null,"🗓️ שבוע חדש"),
-      h("div",{class:"hint"},"מוחק את הנרשמים ואת הכוחות. הדירוגים נשמרים."),
+      h("div",{class:"hint"},"מוחק את הנרשמים, הכוחות וההצבעות. הדירוגים והצבעים נשמרים."),
       h("button",{class:"btn warn full",style:"margin-top:12px",onclick:()=>{
         if(!S.confirmReset){ S.confirmReset=true; render(); setTimeout(()=>{S.confirmReset=false;render();},4000); return; }
         S.confirmReset=false; S.tab="list"; newWeek(); render();
@@ -549,6 +708,7 @@ function viewSettings(){
   ];
 }
 
+window.addEventListener("hashchange",()=>{ if(location.hash==="#teams"){ S.tab="teams"; render(); } });
 render();
 
 </script>
