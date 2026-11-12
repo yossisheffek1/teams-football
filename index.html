@@ -197,6 +197,18 @@
   .aprow{display:flex;align-items:center;gap:6px;margin-top:8px}
   .sel{flex:1;min-width:0;border:1.5px solid var(--line);border-radius:12px;padding:10px 6px;background:#fafbf9;font:inherit}
   .prow .ic.gk{flex:none}
+  .locked{margin-top:12px;background:#f3f4f6;color:#374151;border-radius:12px;padding:10px 12px;font-size:14px;line-height:1.5}
+  .guest{margin-top:10px;background:#fff;border:1px dashed #cfe8d6;border-radius:12px;padding:8px 10px;font-size:14.5px;display:flex;flex-direction:column;gap:4px}
+  .me .linkbtn{display:block}
+  .mvpcall{background:#fffbeb;border-color:#f6d77a}
+  .banner.mvp{background:#fffbeb;color:#7a5212;font-size:16px}
+  .mvpc{border-color:#f6d77a;background:#fffdf5}
+  .sug{border-color:#c7d7fe;background:#f5f8ff}
+  .sugrow{display:flex;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--line)}
+  .sugrow .btn{padding:8px 12px}
+  .stars button{width:22px;font-size:17px}
+  .prow .ic{width:28px}
+  .prow .nm{min-width:64px}
 </style>
 </head>
 <body>
@@ -229,17 +241,18 @@ const COLORS = [
   {n:"לבנים", c:"#ffffff", e:"⚪"}, {n:"סגולים", c:"#7c3aed", e:"🟣"}, {n:"ורודים", c:"#ec4899", e:"🩷"},
   {n:"חומים", c:"#92400e", e:"🟤"}
 ];
-const DEF_CFG = {capacity:18, numTeams:3, open:true, colors:[0,1,2,3,4,5,6,7], openAt:null, game:{day:"",time:"",place:""}, price:0, payLink:""};
+const DEF_CFG = {capacity:18, numTeams:3, open:true, colors:[0,1,2,3,4,5,6,7], openAt:null, game:{day:"",time:"",place:""}, price:0, payLink:"", gameAt:null, lockHours:0, allowGuests:true};
 const OPT_NAMES = ["אופציה א׳","אופציה ב׳"];
 const S = {
-  cfg:{...DEF_CFG}, cfgLoaded:false, signups:[], signupsLoaded:false, ratings:[], apart:[], teams:null, votes:[], paid:new Set(), history:[],
+  cfg:{...DEF_CFG}, cfgLoaded:false, signups:[], signupsLoaded:false, ratings:[], apart:[], teams:null, votes:[], paid:new Set(), history:[], mvpVotes:[], lates:[],
   uid:null, isAdmin:false, loading:true, error:null,
   tab: location.hash==="#teams" ? "teams" : location.hash==="#stats" ? "stats" : "list",
   showPaste:false, confirmReset:false, confirmCancel:false, copyText:null, busy:false,
   subSel:new Set(), showColors:false, showImg:null, showText:null,
-  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false
+  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false, showGuest:false, confirmGuest:false
 };
 try{ S.promoted = JSON.parse(localStorage.getItem("promoted")||"[]"); }catch(e){}
+let dismissedSug=new Set(); try{ dismissedSug=new Set(JSON.parse(localStorage.getItem("dismissedSug")||"[]")); }catch(e){}
 
 // ---------- utils ----------
 const $ = id => document.getElementById(id);
@@ -290,8 +303,13 @@ const colorOf = i => COLORS[colorSlots(Math.max(i+1, S.cfg.numTeams))[i]];
 const lsGet = k => { try{ return localStorage.getItem(k)||""; }catch(e){ return ""; } };
 const lsSet = (k,v) => { try{ localStorage.setItem(k,v); }catch(e){} };
 const isOpen = () => !!S.cfg.open || (!!S.cfg.openAt && Date.now()>=S.cfg.openAt);
-const game = () => ({day:"",time:"",place:"",...(S.cfg.game||{})});
+const game = () => {
+  const g={day:"",time:"",place:"",...(S.cfg.game||{})};
+  if(S.cfg.gameAt){ const d=new Date(S.cfg.gameAt); g.day=`יום ${DAYS[d.getDay()]} ${d.getDate()}.${d.getMonth()+1}`; g.time=`${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; }
+  return g;
+};
 function gameLine(){ const g=game(); return [g.day && `📅 ${g.day}`, g.time && `⏰ ${g.time}`, g.place && `📍 ${g.place}`].filter(Boolean).join(" · "); }
+const cancelLocked = () => { const c=S.cfg, now=Date.now(); return !!c.gameAt && (c.lockHours||0)>0 && now>=c.gameAt-c.lockHours*3600000 && now<c.gameAt+6*3600000; };
 async function run(fn, okMsg){
   try{ await fn(); if(okMsg) toast(okMsg); return true; }
   catch(e){
@@ -306,13 +324,13 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 const cfgRef = doc(db,"config","main"), teamsRef = doc(db,"teams","current"), ratRef = doc(db,"ratings","main"), paidRef = doc(db,"payments","current");
-const signCol = collection(db,"signups"), votesCol = collection(db,"votes"), histCol = collection(db,"history");
+const signCol = collection(db,"signups"), votesCol = collection(db,"votes"), histCol = collection(db,"history"), mvpCol = collection(db,"mvpVotes"), latesRef = doc(db,"lates","main");
 
 // ---------- data ----------
 let ratUnsub = null;
 function normTeams(d){
   if(!d) return null;
-  if(Array.isArray(d.options) && d.options.length) return {at:d.at||0, options:d.options, status:d.status||"draft", chosen:d.chosen??null};
+  if(Array.isArray(d.options) && d.options.length) return {at:d.at||0, options:d.options, status:d.status||"draft", chosen:d.chosen??null, mvpOpen:!!d.mvpOpen, mvp:d.mvp||null};
   if(Array.isArray(d.teams) && d.teams.length)
     return {at:d.at||0, options:[{teams:d.teams.map(t=>({players:t.players||[], subs:t.subs||[]}))}], status:"final", chosen:0};
   return null;
@@ -321,13 +339,14 @@ function subscribe(){
   onSnapshot(cfgRef, s=>{ S.cfg = s.exists() ? {...DEF_CFG, ...s.data()} : {...DEF_CFG}; S.cfgLoaded=true; detectPromotions(); armOpenTimer(); render(); }, e=>fail(e));
   onSnapshot(teamsRef, s=>{ S.teams = normTeams(s.exists()?s.data():null); render(); }, e=>fail(e));
   onSnapshot(query(signCol, orderBy("ts")), q=>{
-    S.signups = q.docs.map(d=>{ const x=d.data({serverTimestamps:"estimate"}); return {id:d.id, name:x.name, uid:x.uid, ts:x.ts?x.ts.toMillis():Date.now(), tsRaw:x.ts}; })
+    S.signups = q.docs.map(d=>{ const x=d.data({serverTimestamps:"estimate"}); return {id:d.id, name:x.name, uid:x.uid, guestOf:x.guestOf||null, ts:x.ts?x.ts.toMillis():Date.now(), tsRaw:x.ts}; })
       .sort((a,b)=>a.ts-b.ts);
     const ids=new Set(S.signups.map(s=>s.id)); [...S.subSel].forEach(id=>{ if(!ids.has(id)) S.subSel.delete(id); });
     S.signupsLoaded=true; S.loading=false; S.error=null; detectPromotions(); render();
   }, e=>fail(e));
   onSnapshot(votesCol, q=>{ S.votes=q.docs.map(d=>({id:d.id, ...d.data()})); render(); }, e=>console.warn("votes",e));
   onSnapshot(paidRef, s=>{ S.paid=new Set(s.exists()?(s.data().paid||[]):[]); render(); }, e=>console.warn("paid",e));
+  onSnapshot(mvpCol, q=>{ S.mvpVotes=q.docs.map(d=>({id:d.id, ...d.data()})); render(); }, e=>console.warn("mvp",e));
   onSnapshot(histCol, q=>{ S.history=q.docs.map(d=>({id:d.id, ...d.data()})).sort((a,b)=>(a.at||0)-(b.at||0)); render(); }, e=>console.warn("history",e));
 }
 function fail(e){ console.error(e); S.loading=false; S.error="לא הצלחתי לטעון את הנתונים. בדוק חיבור לאינטרנט."; render(); }
@@ -340,6 +359,7 @@ async function checkAdmin(user){
   catch(e){ S.isAdmin=false; toast("החשבון הזה לא מוגדר כמארגן"); }
   if(S.isAdmin){
     ratUnsub = onSnapshot(ratRef, s=>{ const d=s.exists()?s.data():{}; S.ratings=d.list||[]; S.apart=d.apart||[]; render(); }, ()=>{});
+    onSnapshot(latesRef, s=>{ S.lates = s.exists() ? (s.data().list||[]) : []; render(); }, ()=>{});
     try{ const c=await getDoc(cfgRef); if(!c.exists()) await setDoc(cfgRef, DEF_CFG); }catch(e){}
   }
   render();
@@ -404,9 +424,33 @@ async function selfRegister(name){
   const me=mySignup();
   if(me){ const i=S.signups.indexOf(me); toast(i<S.cfg.capacity ? `נרשמת! מקום ${i+1} ⚽` : `הרשימה מלאה, אתה מקום ${i-S.cfg.capacity+1} בהמתנה`); }
 }
+function myGuest(){ return S.signups.find(s=>s.id===S.uid+"_g" && s.uid===S.uid); }
 async function selfCancel(){
   const me=mySignup(); if(!me) return;
-  await run(()=>deleteDoc(doc(db,"signups",me.id)), "ההרשמה בוטלה");
+  if(cancelLocked()){ toast("כבר מאוחר מדי לבטל לבד. דבר עם המארגן"); return; }
+  const g=myGuest(), batch=writeBatch(db);
+  batch.delete(doc(db,"signups",me.id)); if(g) batch.delete(doc(db,"signups",g.id));
+  await run(()=>batch.commit(), g?"ההרשמה שלך ושל האורח בוטלה":"ההרשמה בוטלה");
+}
+async function addGuest(name){
+  name=clean(name);
+  if(!name){ toast("כתוב את שם האורח"); return; }
+  if(S.signups.some(s=>norm(s.name)===norm(name))){ toast("השם הזה כבר ברשימה"); return; }
+  if(!isOpen()){ toast("ההרשמה סגורה כרגע"); return; }
+  const ok=await run(()=>setDoc(doc(db,"signups",S.uid+"_g"),{name, ts:serverTimestamp(), uid:S.uid, guestOf:S.uid}));
+  if(ok){ S.showGuest=false; const g=myGuest(); if(g){ const i=S.signups.indexOf(g); toast(i<S.cfg.capacity?`${name} נוסף, מקום ${i+1}`:`${name} נוסף להמתנה (מקום ${i-S.cfg.capacity+1})`); } }
+  render();
+}
+async function cancelGuest(){
+  const g=myGuest(); if(!g) return;
+  if(cancelLocked()){ toast("כבר מאוחר מדי לבטל לבד. דבר עם המארגן"); return; }
+  await run(()=>deleteDoc(doc(db,"signups",g.id)), "האורח הוסר");
+}
+const mvpRoundVotes = () => S.teams ? S.mvpVotes.filter(v=>v.round===S.teams.at && typeof v.name==="string") : [];
+const myMvpVote = () => { const v=mvpRoundVotes().find(v=>v.id===S.uid); return v?v.name:null; };
+async function voteMvp(name){
+  if(!S.teams||!S.teams.mvpOpen||!S.uid) return;
+  await run(()=>setDoc(doc(db,"mvpVotes",S.uid),{name, round:S.teams.at}), `הצבעת ל${name} ⭐`);
 }
 function roundVotes(){ return S.teams ? S.votes.filter(v=>v.round===S.teams.at && (v.choice===0||v.choice===1)) : []; }
 function myVote(){ const v=roundVotes().find(v=>v.id===S.uid); return v ? v.choice : null; }
@@ -432,6 +476,7 @@ function parsePaste(text){
   ).filter(l=>l && l.length<=40 && !/^(רשימה|כדורגל|המתנה|רשימת המתנה)[:\s]*$/.test(l));
 }
 async function adminRemove(s){
+  if(cancelLocked()) recordLate(s.name);
   const idx=S.signups.findIndex(x=>x.id===s.id);
   const promoted = idx<S.cfg.capacity && S.signups.length>S.cfg.capacity ? S.signups[S.cfg.capacity].name : null;
   await run(()=>deleteDoc(doc(db,"signups",s.id)), promoted ? `${s.name} הוסר · ${promoted} עלה מההמתנה ⬆` : `${s.name} הוסר`);
@@ -443,6 +488,11 @@ async function adminMove(i,d){
   batch.update(doc(db,"signups",b.id),{ts:a.tsRaw});
   await run(()=>batch.commit());
 }
+function recordLate(name){
+  S.lates=S.lates.concat([{n:name, at:Date.now()}]);
+  run(()=>setDoc(latesRef,{list:S.lates}), `${name} נרשם כביטול מאוחר ⏰`);
+}
+function removeLate(name){ S.lates=S.lates.filter(x=>norm(x.n)!==norm(name)); render(); run(()=>setDoc(latesRef,{list:S.lates})); }
 let cfgChain=Promise.resolve();
 function setCfg(p, msg){ const c={...S.cfg,...p}; S.cfg=c; armOpenTimer(); render(); cfgChain=cfgChain.then(()=>run(()=>setDoc(cfgRef,c), msg)); }
 function pickColor(slot, c){
@@ -460,11 +510,11 @@ function saveRoster(now){
 }
 function setRating(name,r){
   const cur=rosterOf(name);
-  S.ratings = S.ratings.filter(x=>norm(x.n)!==norm(name)).concat([{n:cur?cur.n:name, r, gk:cur?!!cur.gk:false}]); render(); saveRoster();
+  S.ratings = S.ratings.filter(x=>norm(x.n)!==norm(name)).concat([{n:cur?cur.n:name, r, gk:cur?!!cur.gk:false, since:Date.now()}]); render(); saveRoster();
 }
 function toggleGK(name){
   const cur=rosterOf(name);
-  S.ratings = S.ratings.filter(x=>norm(x.n)!==norm(name)).concat([{n:cur?cur.n:name, r:cur?cur.r:DEF_RATING, gk:!(cur&&cur.gk)}]); render(); saveRoster();
+  S.ratings = S.ratings.filter(x=>norm(x.n)!==norm(name)).concat([{...(cur||{n:name, r:DEF_RATING}), gk:!(cur&&cur.gk)}]); render(); saveRoster();
 }
 function removeFromRoster(name){ S.ratings=S.ratings.filter(x=>norm(x.n)!==norm(name)); render(); saveRoster(true); }
 function addApart(a,b){
@@ -481,25 +531,31 @@ async function newWeek(){
   const batch=writeBatch(db);
   S.signups.forEach(s=>batch.delete(doc(db,"signups",s.id)));
   S.votes.forEach(v=>batch.delete(doc(db,"votes",v.id)));
-  batch.set(teamsRef,{options:[],at:0,status:"draft",chosen:null});
+  S.mvpVotes.forEach(v=>batch.delete(doc(db,"mvpVotes",v.id)));
+  batch.set(teamsRef,{options:[],at:0,status:"draft",chosen:null,mvpOpen:false,mvp:null});
   batch.set(paidRef,{paid:[]});
   let msg="התחלנו שבוע חדש ⚽";
-  if(S.cfg.openAt){
-    let t=S.cfg.openAt; while(t<=Date.now()) t+=WEEK;
-    const c={...S.cfg, open:false, openAt:t}; S.cfg=c; batch.set(cfgRef,c);
-    msg=`שבוע חדש ⚽ ההרשמה תיפתח ${fmtFull(t)}`;
+  const c={...S.cfg};
+  if(c.gameAt){ while(c.gameAt<=Date.now()) c.gameAt+=WEEK; }
+  if(c.openAt){
+    let t=c.openAt; while(t<=Date.now()) t+=WEEK;
+    c.open=false; c.openAt=t; msg=`שבוע חדש ⚽ ההרשמה תיפתח ${fmtFull(t)}`;
   }
+  if(c.gameAt||c.openAt){ S.cfg=c; batch.set(cfgRef,c); }
   S.subSel.clear(); S.resDraft=null;
   await run(()=>batch.commit(), msg);
   armOpenTimer();
 }
 function saveDetails(){
   const d=S.draft, g=game();
-  const ng={day:clean(d.gDay??g.day), time:clean(d.gTime??g.time), place:clean(d.gPlace??g.place).slice(0,80)};
+  const raw={day:"",time:"",place:"",...(S.cfg.game||{})};
+  const ng={day:clean(d.gDay??raw.day), time:clean(d.gTime??raw.time), place:clean(d.gPlace??raw.place).slice(0,80)};
+  let gameAt=S.cfg.gameAt??null;
+  if(d.gameAt!==undefined){ gameAt = d.gameAt ? new Date(d.gameAt).getTime() : null; if(gameAt!=null && !(gameAt>0)) gameAt=null; }
   const price=Math.max(0, Math.round(Number(d.price??S.cfg.price)||0));
   const payLink=String(d.payLink??S.cfg.payLink??"").trim().slice(0,200);
-  ["gDay","gTime","gPlace","price","payLink"].forEach(k=>delete S.draft[k]);
-  setCfg({game:ng, price, payLink}, "הפרטים נשמרו ✔");
+  ["gDay","gTime","gPlace","price","payLink","gameAt"].forEach(k=>delete S.draft[k]);
+  setCfg({game:ng, price, payLink, gameAt}, "הפרטים נשמרו ✔");
 }
 function setAutoOpen(){
   const v=S.draft.openAt; if(!v){ toast("בחר תאריך ושעה"); return; }
@@ -592,7 +648,20 @@ function saveResults(){
   const opt=T.options[T.chosen??0], k=opt.teams.length, slots=colorSlots(Math.max(k,S.cfg.numTeams));
   const wins=S.resDraft||opt.teams.map(()=>0);
   const rec={at:T.at, date:Date.now(), teams:opt.teams.map((t,i)=>({players:t.players, subs:t.subs||[], wins:wins[i]||0, color:slots[i]}))};
-  run(()=>setDoc(doc(db,"history",String(T.at)), rec), "התוצאות נשמרו 🏆");
+  run(()=>setDoc(doc(db,"history",String(T.at)), rec, {merge:true}), "התוצאות נשמרו 🏆");
+}
+async function openMvp(){ if(!S.teams) return; S.teams={...S.teams,mvpOpen:true,mvp:null}; render(); await run(()=>updateDoc(teamsRef,{mvpOpen:true, mvp:null}),"הצבעת MVP נפתחה ⭐"); }
+async function setMvp(name){
+  const T=S.teams; if(!T) return;
+  S.teams={...T,mvpOpen:false,mvp:name}; render();
+  await run(()=>updateDoc(teamsRef,{mvpOpen:false, mvp:name}));
+  await run(()=>setDoc(doc(db,"history",String(T.at)),{at:T.at, date:Date.now(), mvp:name},{merge:true}), `⭐ ${name} הוא ה-MVP!`);
+}
+function mvpTally(){ const m=new Map(); mvpRoundVotes().forEach(v=>m.set(v.name,(m.get(v.name)||0)+1)); return [...m.entries()].sort((a,b)=>b[1]-a[1]); }
+function closeMvp(){
+  const t=mvpTally(); if(!t.length){ toast("אין עדיין הצבעות"); return; }
+  if(t.length>1 && t[0][1]===t[1][1]){ toast("תיקו! לחץ על שם כדי לבחור"); return; }
+  setMvp(t[0][0]);
 }
 function deleteResult(id){ run(()=>deleteDoc(doc(db,"history",id)), "התוצאה נמחקה"); }
 function computeStats(){
@@ -602,13 +671,33 @@ function computeStats(){
     teams.forEach(t=>{
       const best = max>0 && (t.wins||0)===max;
       (t.players||[]).concat(t.subs||[]).forEach(n=>{
-        const k=norm(n); const s=m.get(k)||{name:n, games:0, wins:0, best:0};
+        const k=norm(n); const s=m.get(k)||{name:n, games:0, wins:0, best:0, mvp:0};
         s.name=n; s.games++; s.wins+=(t.wins||0); if(best) s.best++; m.set(k,s);
       });
     });
   }
-  return [...m.values()].sort((a,b)=>b.wins-a.wins || b.best-a.best || (b.wins/b.games)-(a.wins/a.games) || a.name.localeCompare(b.name,"he"));
+  for(const g of S.history) if(g.mvp){ const k=norm(g.mvp); const s=m.get(k)||{name:g.mvp, games:0, wins:0, best:0, mvp:0}; s.mvp++; m.set(k,s); }
+  return [...m.values()].sort((a,b)=>b.wins-a.wins || b.best-a.best || b.mvp-a.mvp || (b.wins/Math.max(1,b.games))-(a.wins/Math.max(1,a.games)) || a.name.localeCompare(b.name,"he"));
 }
+
+function ratingSuggestions(){
+  const per=new Map();
+  for(const g of S.history){
+    const teams=g.teams||[], tot=teams.reduce((a,t)=>a+(t.wins||0),0), k=teams.length; if(!tot||k<2) continue;
+    teams.forEach(t=>{ const share=(t.wins||0)/tot*k;
+      (t.players||[]).forEach(n=>{ const r=rosterOf(n); if(r && r.since && (g.at||0)<r.since) return;
+        const key=norm(n), s=per.get(key)||{name:n,games:0,sum:0}; s.games++; s.sum+=share; per.set(key,s); }); });
+  }
+  const out=[];
+  for(const [key,s] of per){
+    if(s.games<3) continue;
+    const perf=s.sum/s.games, cur=ratingOf(s.name);
+    let to=null; if(perf>=1.35 && cur<RATING_MAX) to=cur+1; else if(perf<=0.65 && cur>1) to=cur-1;
+    if(to!=null && !dismissedSug.has(`${key}:${cur}>${to}`)) out.push({key,name:s.name,cur,to,perf,games:s.games});
+  }
+  return out.sort((a,b)=>Math.abs(b.perf-1)-Math.abs(a.perf-1));
+}
+function dismissSug(s){ dismissedSug.add(`${s.key}:${s.cur}>${s.to}`); lsSet("dismissedSug",JSON.stringify([...dismissedSug])); render(); }
 
 // ---------- share ----------
 const pageUrl = () => location.href.split("#")[0];
@@ -629,6 +718,8 @@ function inviteText(){
   t+=`${S.cfg.capacity} מקומות, כל הקודם זוכה.\nנרשמים כאן: ${pageUrl()}`;
   return t;
 }
+function mvpText(){ return `⭐ ה-MVP של הערב: ${S.teams.mvp}! 👏`; }
+function mvpCallText(){ return `⭐ מי היה ה-MVP של הערב? מצביעים כאן:\n${pageUrl()}#teams`; }
 function promoText(name){ return `${name}, התפנה מקום בכדורגל! אתה בפנים ⚽`+(gameLine()?`\n${gameLine()}`:"")+`\n${pageUrl()}`; }
 function payRemindText(){
   const cap=S.cfg.capacity, unpaid=S.signups.slice(0,cap).filter(s=>!S.paid.has(s.id));
@@ -794,7 +885,7 @@ function render(){
   if(S.loading){ m.replaceChildren(h("div",{class:"loading"},"טוען…")); return; }
   const ae=document.activeElement, keepId=ae&&ae.id, val=ae&&ae.value;
   const views={list:viewList,teams:viewTeams,stats:viewStats,players:viewPlayers,settings:viewSettings};
-  m.replaceChildren(...[].concat(views[S.tab]()), footer());
+  m.replaceChildren(...[].concat(views[S.tab]()).flat().filter(Boolean), footer());
   if(keepId && $(keepId)){ const el=$(keepId); if(el.tagName==="INPUT" && el.type==="text") el.value=val; el.focus(); }
   if($("cd")) startCountdown();
 }
@@ -854,10 +945,13 @@ function myCard(){
     return h("div",{class:"card me "+(inGame?"in":"waiting")},
       h("div",{class:"mebig"}, inGame ? "✅ אתה ברשימה!" : "⏳ אתה ברשימת המתנה"),
       h("div",{class:"mesub"}, inGame ? `${me.name} · מקום ${i+1} מתוך ${cap}` : `${me.name} · מקום ${i-cap+1} בהמתנה. אם מישהו יבטל תעלה אוטומטית.`),
-      h("button",{class:"btn warn full",style:"margin-top:12px",onclick:()=>{
-        if(!S.confirmCancel){ S.confirmCancel=true; render(); setTimeout(()=>{S.confirmCancel=false;render();},4000); return; }
-        S.confirmCancel=false; selfCancel();
-      }}, S.confirmCancel ? "בטוח? לחץ שוב לביטול" : "לא מגיע, בטל הרשמה"));
+      guestBox(),
+      cancelLocked()
+        ? h("div",{class:"locked"},`🔒 פחות מ-${S.cfg.lockHours} שעות למשחק, אי אפשר לבטל לבד. אם אתה לא מגיע, דבר עם המארגן.`)
+        : h("button",{class:"btn warn full",style:"margin-top:12px",onclick:()=>{
+            if(!S.confirmCancel){ S.confirmCancel=true; render(); setTimeout(()=>{S.confirmCancel=false;render();},4000); return; }
+            S.confirmCancel=false; selfCancel();
+          }}, S.confirmCancel ? "בטוח? לחץ שוב לביטול" : "לא מגיע, בטל הרשמה"));
   }
   if(!isOpen()){
     if(S.cfg.openAt && S.cfg.openAt>Date.now())
@@ -876,12 +970,31 @@ function myCard(){
     h("div",{class:"hint",style:"margin-top:8px"},"כל הקודם זוכה. אפשר לבטל מהטלפון הזה בכל זמן."));
 }
 
+function guestBox(){
+  if(S.cfg.allowGuests===false) return null;
+  const g=myGuest(), cap=S.cfg.capacity;
+  if(g){
+    const i=S.signups.indexOf(g);
+    return h("div",{class:"guest"},
+      h("span",null,`👤 האורח שלך: `,h("b",null,g.name),` · `+(i<cap?`מקום ${i+1}`:`מקום ${i-cap+1} בהמתנה`)),
+      cancelLocked()?null:h("button",{class:"linkbtn",onclick:()=>{
+        if(!S.confirmGuest){ S.confirmGuest=true; render(); setTimeout(()=>{S.confirmGuest=false;render();},4000); return; }
+        S.confirmGuest=false; cancelGuest(); }}, S.confirmGuest?"בטוח?":"הסר אורח"));
+  }
+  if(!isOpen()) return null;
+  if(!S.showGuest) return h("button",{class:"linkbtn",onclick:()=>{S.showGuest=true;render();}},"➕ מביא חבר? הוסף אורח");
+  const inp=h("input",{id:"guestName",type:"text",placeholder:"שם האורח",autocomplete:"off",onkeydown:e=>{ if(e.key==="Enter") addGuest(e.target.value); }});
+  return h("div",{class:"guest"},
+    h("div",{class:"addrow"},inp,h("button",{class:"btn",onclick:()=>addGuest(inp.value)},"הוסף")),
+    h("div",{class:"hint",style:"margin-top:4px"},"האורח נכנס במקום הפנוי הבא (או להמתנה). אפשר אורח אחד לכל שחקן."));
+}
+
 function rowFor(s,i,isWait){
   const pos=isWait?i-S.cfg.capacity+1:i+1, mine=s.uid===S.uid&&s.id===S.uid;
   const showPay=S.cfg.price>0 && !isWait, paid=S.paid.has(s.id);
   return h("li",{class:"row"+(isWait?" wait":"")+(mine?" mine":"")},
     h("div",{class:"num"},pos),
-    h("div",{class:"nm"},h("b",null,s.name+(mine?" (אתה)":"")+(showPay&&paid&&!S.isAdmin?" 💰":"")),h("small",null,"נרשם "+fmtTime(s.ts))),
+    h("div",{class:"nm"},h("b",null,s.name+(mine?" (אתה)":"")+(showPay&&paid&&!S.isAdmin?" 💰":"")),h("small",null,(s.guestOf?`👤 אורח של ${(S.signups.find(x=>x.id===s.guestOf)||{name:"שחקן"}).name} · `:"")+"נרשם "+fmtTime(s.ts))),
     S.isAdmin ? h("div",{class:"ctl"},
       showPay ? h("button",{class:"ic pay"+(paid?" on":""),title:paid?"שילם":"לא שילם",onclick:()=>togglePaid(s.id)},"💰") : null,
       h("button",{class:"ic",title:"למעלה",disabled:i===0,onclick:()=>adminMove(i,-1)},"▲"),
@@ -896,6 +1009,9 @@ function viewList(){
   if(S.teams && S.teams.status==="voting" && !S.isAdmin)
     out.push(h("button",{class:"card votecall",onclick:()=>{S.tab="teams";render();}},
       h("b",null,"🗳️ יש הצבעה על הכוחות!"), h("span",null, myVote()==null ? "לחץ כאן כדי להצביע" : `הצבעת ל${OPT_NAMES[myVote()]} · לחץ לצפייה`)));
+  if(S.teams && S.teams.mvpOpen && !S.isAdmin)
+    out.push(h("button",{class:"card votecall mvpcall",onclick:()=>{S.tab="teams";render();}},
+      h("b",null,"⭐ מי ה-MVP של הערב?"), h("span",null, myMvpVote() ? `הצבעת ל${myMvpVote()} · לחץ לשינוי` : "לחץ כאן כדי להצביע")));
   out.push(gameCard());
   out.push(myCard());
   out.push(payCard());
@@ -993,6 +1109,30 @@ function resultsCard(){
         h("button",{onclick:()=>{ d[i]++; render(); }},"+"))); }),
     h("button",{class:"btn full",style:"margin-top:10px",onclick:saveResults}, saved?"💾 עדכן תוצאות":"💾 שמור תוצאות"));
 }
+function mvpCard(opt){
+  const T=S.teams, names=opt.teams.flatMap(t=>t.players.concat(t.subs||[]));
+  if(S.isAdmin){
+    if(T.mvpOpen){
+      const tally=mvpTally(), cnt=new Map(tally);
+      return h("div",{class:"card mvpc"},
+        h("h2",null,"⭐ הצבעת MVP",h("span",{class:"count"},`${mvpRoundVotes().length} הצביעו`)),
+        h("div",{class:"hint"},"לחץ על שם כדי לבחור ידנית, או סגור והכרז על המנצח."),
+        h("div",{class:"chips"},names.slice().sort((a,b)=>(cnt.get(b)||0)-(cnt.get(a)||0)).map(n=>h("button",{class:"chip",onclick:()=>setMvp(n)},`${n}${cnt.get(n)?` · ${cnt.get(n)}`:""}`))),
+        h("div",{class:"hint",style:"margin-top:10px"},"שלח לקבוצה קישור להצבעה:"),
+        shareRow(mvpCallText()),
+        h("button",{class:"btn full",style:"margin-top:10px",onclick:closeMvp},"סגור הצבעה והכרז"));
+    }
+    if(T.mvp) return h("div",{class:"card mvpc"},h("h2",null,"⭐ MVP"),shareRow(mvpText()),h("button",{class:"linkbtn",onclick:openMvp},"פתח הצבעה מחדש"));
+    return h("div",{class:"card mvpc"},h("h2",null,"⭐ MVP של הערב"),
+      h("div",{class:"hint"},"אחרי המשחק, פתח הצבעה וכולם יבחרו את השחקן הטוב ביותר. ה-MVP נכנס לטבלה."),
+      h("button",{class:"btn full",style:"margin-top:10px",onclick:openMvp},"⭐ פתח הצבעת MVP"));
+  }
+  const mine=myMvpVote();
+  return h("div",{class:"card mvpc"},
+    h("h2",null,"⭐ מי ה-MVP של הערב?"),
+    h("div",{class:"hint"}, mine?`הצבעת ל${mine}. אפשר לשנות עד שההצבעה נסגרת.`:"בחר את השחקן הטוב ביותר הערב:"),
+    h("div",{class:"chips"},names.map(n=>h("button",{class:"chip"+(mine===n?" on":""),onclick:()=>voteMvp(n)},(mine===n?"⭐ ":"")+n))));
+}
 function viewTeams(){
   const out=[], T=S.teams, cap=S.cfg.capacity, active=S.signups.slice(0,cap);
   if(S.isAdmin) out.push(splitControls());
@@ -1008,6 +1148,8 @@ function viewTeams(){
 
   if(T.status==="final"){
     const idx=T.chosen??0, opt=T.options[idx];
+    if(T.mvp) out.push(h("div",{class:"banner mvp"},`⭐ ה-MVP של הערב: ${T.mvp}`));
+    if(T.mvpOpen || S.isAdmin) out.push(mvpCard(opt));
     out.push(h("div",{class:"banner final"},"✅ אלה הכוחות להשבוע"+(T.options.length>1?` (${OPT_NAMES[idx]})`:"")));
     out.push(h("div",{class:"teams"},opt.teams.map((tm,i)=>teamCard(tm,i,S.isAdmin,opt))));
     if(S.isAdmin){
@@ -1054,15 +1196,15 @@ function viewStats(){
   out.push(h("div",{class:"card"},
     h("h2",null,"🏆 טבלת העונה",h("span",{class:"count"},`${S.history.length} ערבים`)),
     h("table",{class:"stats-t"},
-      h("thead",null,h("tr",null,h("th",null,"#"),h("th",{class:"tn"},"שחקן"),h("th",null,"ערבים"),h("th",null,"ניצחונות"),h("th",null,"👑"))),
+      h("thead",null,h("tr",null,h("th",null,"#"),h("th",{class:"tn"},"שחקן"),h("th",null,"ערבים"),h("th",null,"ניצחונות"),h("th",null,"👑"),h("th",null,"⭐"))),
       h("tbody",null,st.map((s,i)=>h("tr",{class:i<3?"top":""},
-        h("td",null,medal(i)),h("td",{class:"tn"},s.name),h("td",null,s.games),h("td",null,h("b",null,s.wins)),h("td",null,s.best))))),
-    h("div",{class:"hint",style:"margin-top:8px"},"ניצחונות = כמה משחקים הקבוצה שלך ניצחה. 👑 = ערבים שהקבוצה שלך הייתה הכי טובה.")));
+        h("td",null,medal(i)),h("td",{class:"tn"},s.name),h("td",null,s.games),h("td",null,h("b",null,s.wins)),h("td",null,s.best),h("td",null,s.mvp||""))))),
+    h("div",{class:"hint",style:"margin-top:8px"},"ניצחונות = כמה משחקים הקבוצה שלך ניצחה. 👑 = ערבים שהקבוצה שלך הייתה הכי טובה. ⭐ = MVP.")));
   out.push(h("div",{class:"card"},
     h("h2",null,"📜 משחקים קודמים"),
     S.history.slice().reverse().map(g=>h("div",{class:"hrow"},
       h("span",{class:"hdate"},fmtDate(g.date||g.at)),
-      h("span",{class:"hres"},(g.teams||[]).map(t=>{ const c=COLORS[(t.color??0)%COLORS.length]; return `${c.e} ${t.wins||0}`; }).join("  ")),
+      h("span",{class:"hres"},(g.teams||[]).map(t=>{ const c=COLORS[(t.color??0)%COLORS.length]; return `${c.e} ${t.wins||0}`; }).join("  ")+(g.mvp?`   ⭐ ${g.mvp}`:"")),
       S.isAdmin ? h("button",{class:"ic x",title:"מחק",onclick:()=>deleteResult(g.id)},"×") : null))));
   return out;
 }
@@ -1076,7 +1218,17 @@ function viewPlayers(){
     onkeydown:e=>{ if(e.key==="Enter"&&e.target.value.trim()){ setRating(clean(e.target.value),DEF_RATING); e.target.value=""; } }});
   const sel=(key)=>h("select",{class:"sel",onchange:e=>{S.draft[key]=e.target.value;}},
     h("option",{value:""},"בחר שחקן"), names.map(n=>{ const o=h("option",{value:n},n); if(S.draft[key]===n) o.selected=true; return o; }));
+  const sugs=ratingSuggestions();
+  const lateCount=new Map(); S.lates.forEach(x=>{ const k=norm(x.n); const o=lateCount.get(k)||{n:x.n,c:0,last:0}; o.c++; o.last=Math.max(o.last,x.at||0); lateCount.set(k,o); });
   return [
+    sugs.length ? h("div",{class:"card sug"},
+      h("h2",null,"💡 הצעות לעדכון דירוג"),
+      h("div",{class:"hint"},"לפי התוצאות בטבלה מאז הדירוג האחרון של כל שחקן."),
+      sugs.map(s=>h("div",{class:"sugrow"},
+        h("div",{class:"nm"},h("b",null,`${s.name}: ${s.cur} ← ${s.to}`),
+          h("small",{class:"unr"},(s.perf>1?`הקבוצות שלו ניצחו פי ${s.perf.toFixed(1)} מהממוצע`:`הקבוצות שלו ניצחו רק ${Math.round(s.perf*100)}% מהממוצע`)+` · ${s.games} ערבים`)),
+        h("button",{class:"btn",onclick:()=>{ setRating(s.name,s.to); toast(`${s.name} עודכן ל-${s.to}`); }},"אשר"),
+        h("button",{class:"ic x",title:"התעלם",onclick:()=>dismissSug(s)},"×")))) : null,
     h("div",{class:"card"},
       h("h2",null,"⭐ דירוג שחקנים"),
       h("div",{class:"hint"},`הדירוג (1 עד ${RATING_MAX}) משמש רק לאיזון הקבוצות, ורק אתה רואה אותו. שחקן בלי דירוג נחשב ${DEF_RATING}. לחץ על 🧤 כדי לסמן שוער, והאפליקציה תדאג לשוער אחד בכל קבוצה.`),
@@ -1097,10 +1249,17 @@ function viewPlayers(){
         h("button",{class:"btn",onclick:()=>addApart(S.draft.apA,S.draft.apB)},"הוסף")) : h("div",{class:"hint"},"צריך לפחות שני שחקנים."),
       S.apart.length ? h("div",{style:"margin-top:8px"},S.apart.map((p,i)=>h("div",{class:"prow"},
         h("div",{class:"nm"},h("b",null,`${p.a} ⟷ ${p.b}`)),
-        h("button",{class:"ic x",title:"הסר",onclick:()=>removeApart(i)},"×")))) : null)
+        h("button",{class:"ic x",title:"הסר",onclick:()=>removeApart(i)},"×")))) : null),
+    h("div",{class:"card"},
+      h("h2",null,"⏰ ביטולים מאוחרים"),
+      h("div",{class:"hint"},"כשאתה מסיר שחקן בזמן חסימת הביטול, זה נרשם כאן אוטומטית."),
+      lateCount.size ? [...lateCount.values()].sort((a,b)=>b.c-a.c).map(o=>h("div",{class:"prow"},
+        h("div",{class:"nm"},h("b",null,o.n),h("small",{class:"unr"},`${o.c} ביטולים · אחרון ${fmtDate(o.last)}`)),
+        h("button",{class:"ic x",title:"אפס",onclick:()=>removeLate(o.n)},"×"))) : h("div",{class:"empty"},"אין ביטולים מאוחרים 👍"))
   ];
 }
 
+const toLocalInput=ms=>{ const t=new Date(ms-new Date(ms).getTimezoneOffset()*60000); return t.toISOString().slice(0,16); };
 function viewSettings(){
   const c=S.cfg, k=c.numTeams, cap=c.capacity, per=[...new Set(sizesFor(cap,k))].sort((a,b)=>b-a).join(" / ");
   const g=game(), d=S.draft;
@@ -1113,7 +1272,7 @@ function viewSettings(){
       h("output",null,v),
       h("button",{onclick:()=>v<max&&setCfg({[key]:v+1})},"+")));
   const open=isOpen(), future=c.openAt && c.openAt>Date.now();
-  const toLocalInput=ms=>{ const t=new Date(ms-new Date(ms).getTimezoneOffset()*60000); return t.toISOString().slice(0,16); };
+
   return [
     h("div",{class:"card"},
       h("h2",null,"🔓 הרשמה"),
@@ -1129,13 +1288,20 @@ function viewSettings(){
     h("div",{class:"card"},
       h("h2",null,"📍 פרטי המשחק"),
       h("div",{class:"hint"},"יופיעו לכולם בראש הדף, עם כפתור ניווט."),
-      field("gDay","יום",g.day,{ph:"למשל: יום שלישי"}),
-      field("gTime","שעה",g.time,{ph:"למשל: 21:00"}),
+      field("gameAt","מועד המשחק הקרוב",c.gameAt?toLocalInput(c.gameAt):"",{type:"datetime-local"}),
+      h("div",{class:"hint",style:"margin-top:4px"},"בלחיצה על ״פתח רשימה חדשה״ המועד עובר לשבוע הבא אוטומטית."),
       field("gPlace","מקום",g.place,{ph:"למשל: מגרש בית ספר אורט, חולון"}),
       h("div",{class:"sub-h"},"💳 תשלום"),
       field("price","מחיר לשחקן (₪), 0 = בלי מעקב תשלומים",c.price||"",{type:"number",im:"numeric",ph:"0"}),
       field("payLink","קישור לביט / פייבוקס, או מספר טלפון",c.payLink,{ph:"https://...",dir:"ltr"}),
       h("button",{class:"btn full",style:"margin-top:10px",onclick:saveDetails},"💾 שמור פרטים")),
+    h("div",{class:"card"},
+      h("h2",null,"🔒 ביטולים ואורחים"),
+      h("div",{class:"hint"}, c.gameAt ? "כמה שעות לפני המשחק שחקנים כבר לא יכולים לבטל לבד?" : "כדי לחסום ביטולים, קבע קודם מועד משחק בכרטיס ״פרטי המשחק״."),
+      h("div",{class:"chips"},[0,2,4,6,12,24].map(x=>h("button",{class:"chip"+((c.lockHours||0)===x?" on":""),onclick:()=>setCfg({lockHours:x})},x?`${x} שעות`:"בלי חסימה"))),
+      h("div",{class:"stepper",style:"margin-top:8px"},
+        h("div",{class:"lbl"},h("b",null,"אורחים (+1)"),h("small",null,c.allowGuests===false?"שחקנים לא יכולים להוסיף אורח":"כל שחקן רשום יכול להוסיף אורח אחד")),
+        h("button",{class:"btn "+(c.allowGuests===false?"":"ghost"),onclick:()=>setCfg({allowGuests:c.allowGuests===false})},c.allowGuests===false?"אפשר":"בטל"))),
     h("div",{class:"card"},
       h("h2",null,"⚙️ הגדרות המשחק"),
       stepper("כמות שחקנים","מי שמעבר לזה נכנס להמתנה",cap,2,60,"capacity"),
