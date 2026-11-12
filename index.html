@@ -214,6 +214,14 @@
   .hedit{border:2px solid var(--accent);border-radius:14px;padding:10px 12px;margin:8px 0;background:#f8fcf9}
   .hedit-h{font-weight:800;margin-bottom:4px}
   .hedit .stepper small{display:block;max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .phone-in{width:100%;margin-top:8px;border:1.5px solid var(--line);border-radius:12px;padding:10px 12px;background:#fafbf9;outline:none;text-align:right}
+  .phone-in:focus{border-color:var(--accent)}
+  .pushbtn{margin-top:10px}
+  .pushon{margin-top:10px;font-size:13.5px;color:var(--accent)}
+  .pushask{margin-top:10px;font-size:13.5px;color:var(--muted);line-height:1.5}
+  .nm.click{cursor:pointer}
+  .phedit{background:#f7f9ff;border-radius:12px;padding:8px 10px;margin:2px 0 8px}
+  .phedit input{flex:1;min-width:0;border:1.5px solid var(--line);border-radius:12px;padding:10px 12px;background:#fff}
 </style>
 </head>
 <body>
@@ -237,8 +245,11 @@ const firebaseConfig = {
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getMessaging, getToken, onMessage, isSupported } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging.js";
 import { getFirestore, doc, collection, onSnapshot, setDoc, addDoc, deleteDoc, getDoc, updateDoc, serverTimestamp, query, orderBy, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
+// Web Push key from Firebase → Project settings → Cloud Messaging → Web Push certificates
+const VAPID_KEY = "";
 const RATING_MAX = 7, DEF_RATING = 4, WEEK = 7*24*3600*1000;
 const COLORS = [
   {n:"כתומים", c:"#f97316", e:"🟠"}, {n:"כחולים", c:"#2563eb", e:"🔵"}, {n:"צהובים", c:"#facc15", e:"🟡"},
@@ -249,12 +260,12 @@ const COLORS = [
 const DEF_CFG = {capacity:18, numTeams:3, open:true, colors:[0,1,2,3,4,5,6,7], openAt:null, game:{day:"",time:"",place:""}, price:0, payLink:"", gameAt:null, lockHours:0, allowGuests:true};
 const OPT_NAMES = ["אופציה א׳","אופציה ב׳"];
 const S = {
-  cfg:{...DEF_CFG}, cfgLoaded:false, signups:[], signupsLoaded:false, ratings:[], apart:[], teams:null, votes:[], paid:new Set(), history:[], mvpVotes:[], lates:[],
+  cfg:{...DEF_CFG}, cfgLoaded:false, signups:[], signupsLoaded:false, ratings:[], apart:[], teams:null, votes:[], paid:new Set(), history:[], mvpVotes:[], lates:[], phones:{}, pushState:"unknown",
   uid:null, isAdmin:false, loading:true, error:null,
   tab: location.hash==="#teams" ? "teams" : location.hash==="#stats" ? "stats" : "list",
   showPaste:false, confirmReset:false, confirmCancel:false, copyText:null, busy:false,
   subSel:new Set(), showColors:false, showImg:null, showText:null,
-  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false, showGuest:false, confirmGuest:false, editHist:null, histDraft:null, confirmDel:null, confirmResetHist:false
+  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false, showGuest:false, confirmGuest:false, editHist:null, histDraft:null, editPhone:null, confirmDel:null, confirmResetHist:false
 };
 try{ S.promoted = JSON.parse(localStorage.getItem("promoted")||"[]"); }catch(e){}
 let dismissedSug=new Set(); try{ dismissedSug=new Set(JSON.parse(localStorage.getItem("dismissedSug")||"[]")); }catch(e){}
@@ -294,6 +305,14 @@ function fmtLeft(ms){
   if(hh) return `${hh}:${String(mm).padStart(2,"0")}:${String(ss).padStart(2,"0")}`;
   return `${mm}:${String(ss).padStart(2,"0")}`;
 }
+function normPhone(p){
+  let d=String(p||"").replace(/[^\d+]/g,"");
+  if(d.startsWith("+")) d=d.slice(1);
+  if(d.startsWith("00")) d=d.slice(2);
+  if(d.startsWith("0")) d="972"+d.slice(1);
+  return /^\d{9,15}$/.test(d) ? d : "";
+}
+const prettyPhone = p => p && p.startsWith("972") ? "0"+p.slice(3) : (p||"");
 const rosterOf = name => S.ratings.find(x=>norm(x.n)===norm(name));
 function ratingOf(name){ const r=rosterOf(name); return r ? r.r : DEF_RATING; }
 const isGK = name => !!(rosterOf(name)||{}).gk;
@@ -364,6 +383,7 @@ async function checkAdmin(user){
   catch(e){ S.isAdmin=false; toast("החשבון הזה לא מוגדר כמארגן"); }
   if(S.isAdmin){
     ratUnsub = onSnapshot(ratRef, s=>{ const d=s.exists()?s.data():{}; S.ratings=d.list||[]; S.apart=d.apart||[]; render(); }, ()=>{});
+    onSnapshot(collection(db,"phones"), q=>{ const m={}; q.docs.forEach(d=>{ m[d.id]=d.data().phone; }); S.phones=m; render(); }, ()=>{});
     onSnapshot(latesRef, s=>{ S.lates = s.exists() ? (s.data().list||[]) : []; render(); }, ()=>{});
     try{ const c=await getDoc(cfgRef); if(!c.exists()) await setDoc(cfgRef, DEF_CFG); }catch(e){}
   }
@@ -371,7 +391,8 @@ async function checkAdmin(user){
 }
 onAuthStateChanged(auth, async user=>{
   if(!user){ try{ await signInAnonymously(auth); }catch(e){ fail(e); } return; }
-  S.uid = user.uid;
+  const first=!S.uid; S.uid = user.uid;
+  if(first) initPush();
   await checkAdmin(user);
 });
 subscribe();
@@ -425,9 +446,15 @@ async function selfRegister(name){
   lsSet("myName", name);
   S.busy=true; render();
   await run(()=>setDoc(doc(db,"signups",S.uid), {name, ts:serverTimestamp(), uid:S.uid}));
+  const ph=normPhone(S.draft.myPhone ?? lsGet("myPhone"));
+  if(ph){ lsSet("myPhone",ph); savePhone(ph); }
   S.busy=false; render();
   const me=mySignup();
   if(me){ const i=S.signups.indexOf(me); toast(i<S.cfg.capacity ? `נרשמת! מקום ${i+1} ⚽` : `הרשימה מלאה, אתה מקום ${i-S.cfg.capacity+1} בהמתנה`); }
+}
+function savePhone(ph){
+  if(!S.uid) return;
+  setDoc(doc(db,"phones",S.uid),{phone:ph}).then(()=>lsSet("phoneSaved",ph)).catch(e=>console.warn("phone",e));
 }
 function myGuest(){ return S.signups.find(s=>s.id===S.uid+"_g" && s.uid===S.uid); }
 async function selfCancel(){
@@ -520,6 +547,17 @@ function setRating(name,r){
 function toggleGK(name){
   const cur=rosterOf(name);
   S.ratings = S.ratings.filter(x=>norm(x.n)!==norm(name)).concat([{...(cur||{n:name, r:DEF_RATING}), gk:!(cur&&cur.gk)}]); render(); saveRoster();
+}
+function setRosterPhone(name, raw){
+  const ph=normPhone(raw); if(raw && !ph){ toast("מספר לא תקין"); return; }
+  const cur=rosterOf(name);
+  S.ratings = S.ratings.filter(x=>norm(x.n)!==norm(name)).concat([{...(cur||{n:name, r:DEF_RATING}), phone:ph}]); render(); saveRoster(true);
+  toast(ph?"הטלפון נשמר":"הטלפון נמחק");
+}
+function phoneOf(signup){
+  if(!signup) return "";
+  if(signup.uid && signup.uid!=="admin" && S.phones[signup.uid]) return S.phones[signup.uid];
+  const r=rosterOf(signup.name); return (r&&r.phone)||"";
 }
 function removeFromRoster(name){ S.ratings=S.ratings.filter(x=>norm(x.n)!==norm(name)); render(); saveRoster(true); }
 function addApart(a,b){
@@ -880,6 +918,44 @@ function imageShare(kind, text){
     textOpen && text ? shareRow(text) : null);
 }
 
+// ---------- push notifications ----------
+let messaging=null;
+async function initPush(){
+  if(!VAPID_KEY){ S.pushState="off"; return; }
+  try{
+    if(!("serviceWorker" in navigator) || !("Notification" in window) || !(await isSupported())){ S.pushState = (isIOS() && !isStandalone()) ? "ios-browser" : "unsupported"; render(); return; }
+    messaging=getMessaging(app);
+    onMessage(messaging, p=>{ const n=p.notification||{}; toast(`${n.title||""} ${n.body||""}`); });
+    S.pushState = Notification.permission==="granted" ? (lsGet("pushOn")?"on":"ask") : Notification.permission==="denied" ? "denied" : "ask";
+    if(Notification.permission==="granted") refreshToken(false);
+  }catch(e){ console.warn("push",e); S.pushState="unsupported"; }
+  render();
+}
+async function refreshToken(interactive){
+  try{
+    const reg=await navigator.serviceWorker.register("firebase-messaging-sw.js",{scope:"./"});
+    const token=await getToken(messaging,{vapidKey:VAPID_KEY, serviceWorkerRegistration:reg});
+    if(!token) throw new Error("no token");
+    if(S.uid && token!==lsGet("pushToken:"+S.uid)){ await setDoc(doc(db,"tokens",S.uid),{token, at:serverTimestamp()}); lsSet("pushToken:"+S.uid, token); }
+    lsSet("pushOn","1"); S.pushState="on"; render();
+    if(interactive) toast("🔔 התראות הופעלו! נודיע לך כשיתפנה מקום");
+  }catch(e){ console.warn("token",e); if(interactive) toast("לא הצלחתי להפעיל התראות"); }
+}
+async function enablePush(){
+  if(!messaging) return;
+  const perm=await Notification.requestPermission();
+  if(perm!=="granted"){ S.pushState="denied"; render(); toast("ההתראות נחסמו. אפשר להפעיל אותן בהגדרות הדפדפן"); return; }
+  await refreshToken(true);
+}
+function pushBox(){
+  const st=S.pushState;
+  if(st==="off"||st==="unsupported"||st==="unknown") return null;
+  if(st==="on") return h("div",{class:"pushon"},"🔔 התראות פעילות. נודיע לך אם תעלה מההמתנה");
+  if(st==="ios-browser") return h("div",{class:"pushask"},"🔔 רוצה התראה כשמתפנה לך מקום? באייפון צריך קודם להוסיף את האפליקציה למסך הבית ולפתוח אותה משם.");
+  if(st==="denied") return h("div",{class:"pushask"},"🔕 ההתראות חסומות. אפשר להפעיל אותן בהגדרות הדפדפן עבור האתר הזה.");
+  return h("button",{class:"btn ghost full pushbtn",onclick:enablePush},"🔔 הודיעו לי כשמתפנה לי מקום");
+}
+
 // ---------- install (home screen) ----------
 let installEvt=null;
 window.addEventListener("beforeinstallprompt", e=>{ e.preventDefault(); installEvt=e; render(); });
@@ -967,10 +1043,16 @@ function payCard(){
 
 function promoCards(){
   if(!S.isAdmin || !S.promoted.length) return [];
-  return S.promoted.map(p=>h("div",{class:"card promo"},
-    h("div",{class:"promoh"},h("b",null,`⬆️ ${p.name} עלה מההמתנה`),h("button",{class:"ic x",title:"סגור",onclick:()=>dismissPromo(p.id)},"×")),
-    h("div",{class:"hint"},"תעדכן אותו שהוא משחק:"),
-    h("a",{class:"btn wa full",href:waHref(promoText(p.name)),target:"_blank",rel:"noopener",onclick:()=>setTimeout(()=>dismissPromo(p.id),500)},"שלח לו הודעה בוואטסאפ")));
+  return S.promoted.map(p=>{
+    const su=S.signups.find(s=>s.id===p.id), host=su&&su.guestOf?S.signups.find(s=>s.id===su.guestOf):null;
+    const ph=phoneOf(host||su);
+    const text=host?`${host.name}, האורח שלך ${p.name} נכנס לכדורגל! ⚽`+(gameLine()?`\n${gameLine()}`:""):promoText(p.name);
+    const href=ph?`https://wa.me/${ph}?text=${encodeURIComponent(text)}`:waHref(text);
+    return h("div",{class:"card promo"},
+      h("div",{class:"promoh"},h("b",null,`⬆️ ${p.name} עלה מההמתנה`),h("button",{class:"ic x",title:"סגור",onclick:()=>dismissPromo(p.id)},"×")),
+      h("div",{class:"hint"}, ph ? `ההודעה תיפתח ישר בצ'אט עם ${host?host.name:p.name} (${prettyPhone(ph)}):` : "אין לו טלפון שמור, תבחר את הצ'אט בוואטסאפ:"),
+      h("a",{class:"btn wa full",href,target:"_blank",rel:"noopener",onclick:()=>setTimeout(()=>dismissPromo(p.id),500)}, ph?`שלח ל${host?host.name:p.name} בוואטסאפ`:"שלח לו הודעה בוואטסאפ"));
+  });
 }
 
 function myCard(){
@@ -981,6 +1063,7 @@ function myCard(){
       h("div",{class:"mebig"}, inGame ? "✅ אתה ברשימה!" : "⏳ אתה ברשימת המתנה"),
       h("div",{class:"mesub"}, inGame ? `${me.name} · מקום ${i+1} מתוך ${cap}` : `${me.name} · מקום ${i-cap+1} בהמתנה. אם מישהו יבטל תעלה אוטומטית.`),
       guestBox(),
+      pushBox(),
       cancelLocked()
         ? h("div",{class:"locked"},`🔒 פחות מ-${S.cfg.lockHours} שעות למשחק, אי אפשר לבטל לבד. אם אתה לא מגיע, דבר עם המארגן.`)
         : h("button",{class:"btn warn full",style:"margin-top:12px",onclick:()=>{
@@ -1002,6 +1085,8 @@ function myCard(){
   return h("div",{class:"card reg"},
     h("h2",null, full ? "⏳ הרשמה לרשימת המתנה" : "✋ הרשמה למשחק"),
     h("div",{class:"addrow"}, inp, h("button",{class:"btn",disabled:S.busy,onclick:()=>selfRegister(inp.value)}, S.busy?"…":"אני בא!")),
+    h("input",{id:"myPhone",type:"tel",class:"phone-in",placeholder:"📱 טלפון (לא חובה, רק המארגן רואה)",autocomplete:"tel",inputmode:"tel",dir:"ltr",
+      value:S.draft.myPhone ?? prettyPhone(lsGet("myPhone")), oninput:e=>{S.draft.myPhone=e.target.value;}}),
     h("div",{class:"hint",style:"margin-top:8px"},"כל הקודם זוכה. אפשר לבטל מהטלפון הזה בכל זמן."));
 }
 
@@ -1273,16 +1358,23 @@ function viewPlayers(){
         h("button",{class:"ic x",title:"התעלם",onclick:()=>dismissSug(s)},"×")))) : null,
     h("div",{class:"card"},
       h("h2",null,"⭐ דירוג שחקנים"),
-      h("div",{class:"hint"},`הדירוג (1 עד ${RATING_MAX}) משמש רק לאיזון הקבוצות, ורק אתה רואה אותו. שחקן בלי דירוג נחשב ${DEF_RATING}. לחץ על 🧤 כדי לסמן שוער, והאפליקציה תדאג לשוער אחד בכל קבוצה.`),
+      h("div",{class:"hint"},`הדירוג (1 עד ${RATING_MAX}) משמש רק לאיזון הקבוצות, ורק אתה רואה אותו. שחקן בלי דירוג נחשב ${DEF_RATING}. 🧤 = שוער (אחד בכל קבוצה). לחיצה על שם = טלפון לוואטסאפ.`),
       h("div",{class:"addrow",style:"margin-top:10px"},inp,h("button",{class:"btn",onclick:()=>{ if(inp.value.trim()){ setRating(clean(inp.value),DEF_RATING); inp.value=""; } }},"הוסף"))),
     h("div",{class:"card"},
       names.length ? h("div",null,names.map(n=>{
         const r=rosterOf(n), val=r?r.r:0, gk=!!(r&&r.gk);
-        return h("div",{class:"prow"},
-          h("div",{class:"nm"},h("b",null,n),h("small",{class:"unr"}, (r?`דירוג ${val}`:"לא דורג")+(gk?" · שוער":""))),
+        const su=S.signups.find(s=>norm(s.name)===norm(n)), selfPh=su&&su.uid&&su.uid!=="admin"?S.phones[su.uid]:"", ph=(r&&r.phone)||selfPh;
+        const row=h("div",{class:"prow"},
+          h("div",{class:"nm click",onclick:()=>{ S.editPhone=S.editPhone===n?null:n; render(); }},h("b",null,n),h("small",{class:"unr"}, (r?`דירוג ${val}`:"לא דורג")+(gk?" · שוער":"")+(ph?" · 📱":""))),
           h("button",{class:"ic gk"+(gk?" on":""),title:"שוער",onclick:()=>toggleGK(n)},"🧤"),
           h("div",{class:"stars"},Array.from({length:RATING_MAX},(_,k)=>k+1).map(i=>h("button",{class:i<=val?"on":"","aria-label":String(i),onclick:()=>setRating(n,i)},"★"))),
-          r?h("button",{class:"ic x",title:"הסר מהקבועים",onclick:()=>removeFromRoster(n)},"×"):h("span",{style:"width:32px"}));
+          r?h("button",{class:"ic x",title:"הסר מהקבועים",onclick:()=>removeFromRoster(n)},"×"):h("span",{style:"width:28px"}));
+        if(S.editPhone!==n) return row;
+        const pin=h("input",{id:"ph_"+n,type:"tel",dir:"ltr",inputmode:"tel",placeholder:"050-0000000",value:S.draft["ph:"+n] ?? prettyPhone((r&&r.phone)||""),oninput:e=>{S.draft["ph:"+n]=e.target.value;}});
+        return h("div",null,row,h("div",{class:"phedit"},
+          selfPh ? h("div",{class:"hint"},`📱 ${n} מסר בהרשמה: ${prettyPhone(selfPh)}`) : null,
+          h("div",{class:"hint"},"טלפון לשליחת וואטסאפ ישיר (רק אתה רואה):"),
+          h("div",{class:"addrow"},pin,h("button",{class:"btn",onclick:()=>{ setRosterPhone(n,pin.value); delete S.draft["ph:"+n]; S.editPhone=null; }},"שמור"))));
       })) : h("div",{class:"empty"},"אין עדיין שחקנים.")),
     h("div",{class:"card"},
       h("h2",null,"🚫 לא ביחד"),
