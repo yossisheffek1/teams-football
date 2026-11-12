@@ -4,6 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>כדורגל שבועי ⚽</title>
+<meta name="theme-color" content="#0e3b25">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="כדורגל">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <meta property="og:title" content="⚽ הרשמה לכדורגל השבועי">
 <meta property="og:description" content="כל הקודם זוכה, נרשמים בלחיצה">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -154,6 +162,41 @@
   .imgshare{margin-top:8px}
   .imglinks{display:flex;gap:16px;justify-content:center}
   .preview{width:100%;border-radius:12px;border:1px solid var(--line);margin-top:6px;display:block}
+  .tabs button{font-size:14px;padding:9px 2px}
+  .gamecard{background:linear-gradient(180deg,#f3fbf5,#fff);border-color:#cfe8d6}
+  .gline{display:flex;gap:16px;flex-wrap:wrap;font-size:16px}
+  .gplace{margin-top:4px;color:var(--ink);font-size:15px}
+  .btn.waze{background:#33ccff;color:#06283d}
+  .paycard{border-color:#e6dcf7;background:#fbf9ff}
+  .btn.pay{background:#7c3aed;color:#fff;margin-top:6px}
+  .paid-ok{background:#e7f3ea;color:var(--accent);font-weight:700;border-radius:12px;padding:10px 12px;text-align:center}
+  .ic.pay{filter:grayscale(1);opacity:.45}
+  .ic.pay.on{filter:none;opacity:1;background:#fdf6d8}
+  .ic.gk{opacity:.3;font-size:16px}
+  .ic.gk.on{opacity:1;background:#e7f3ea}
+  .promo{border-color:#86d19f;background:#f3fbf5}
+  .promoh{display:flex;align-items:center;justify-content:space-between;font-size:16px}
+  .install{position:relative;background:#f7f9ff;border-color:#dbe3f5;padding-inline-end:40px}
+  .install .close{position:absolute;top:6px;inset-inline-end:6px}
+  .countdown{text-align:center;border:2px dashed #cfe8d6}
+  .cdbig{font-size:38px;font-weight:900;color:var(--accent);margin:6px 0;font-variant-numeric:tabular-nums}
+  .stats-t{width:100%;border-collapse:collapse;font-size:14.5px}
+  .stats-t th{color:var(--muted);font-weight:600;font-size:12.5px;padding:6px 4px;border-bottom:1px solid var(--line)}
+  .stats-t td{text-align:center;padding:8px 4px;border-bottom:1px solid var(--line)}
+  .stats-t .tn{text-align:start;font-weight:600}
+  .stats-t tr.top td{background:#fffbeb}
+  .hrow{display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--line)}
+  .hrow:first-of-type{border-top:0}
+  .hdate{color:var(--muted);font-size:13px;min-width:40px}
+  .hres{flex:1;font-weight:600}
+  .field{display:block;margin-top:10px}
+  .field span{display:block;font-size:13px;color:var(--muted);margin-bottom:4px}
+  .field input,.addrow input[type=datetime-local]{width:100%;border:1.5px solid var(--line);border-radius:12px;padding:10px 12px;background:#fafbf9;outline:none;min-width:0}
+  .field input:focus{border-color:var(--accent)}
+  .sub-h{font-weight:800;margin-top:14px;margin-bottom:2px;font-size:15px}
+  .aprow{display:flex;align-items:center;gap:6px;margin-top:8px}
+  .sel{flex:1;min-width:0;border:1.5px solid var(--line);border-radius:12px;padding:10px 6px;background:#fafbf9;font:inherit}
+  .prow .ic.gk{flex:none}
 </style>
 </head>
 <body>
@@ -179,22 +222,24 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/fireba
 import { getAuth, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { getFirestore, doc, collection, onSnapshot, setDoc, addDoc, deleteDoc, getDoc, updateDoc, serverTimestamp, query, orderBy, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
-const RATING_MAX = 7, DEF_RATING = 4;
+const RATING_MAX = 7, DEF_RATING = 4, WEEK = 7*24*3600*1000;
 const COLORS = [
   {n:"כתומים", c:"#f97316", e:"🟠"}, {n:"כחולים", c:"#2563eb", e:"🔵"}, {n:"צהובים", c:"#facc15", e:"🟡"},
   {n:"ירוקים", c:"#16a34a", e:"🟢"}, {n:"אדומים", c:"#dc2626", e:"🔴"}, {n:"שחורים", c:"#1f2937", e:"⚫"},
   {n:"לבנים", c:"#ffffff", e:"⚪"}, {n:"סגולים", c:"#7c3aed", e:"🟣"}, {n:"ורודים", c:"#ec4899", e:"🩷"},
   {n:"חומים", c:"#92400e", e:"🟤"}
 ];
-const DEF_CFG = {capacity:18, numTeams:3, open:true, colors:[0,1,2,3,4,5,6,7]};
+const DEF_CFG = {capacity:18, numTeams:3, open:true, colors:[0,1,2,3,4,5,6,7], openAt:null, game:{day:"",time:"",place:""}, price:0, payLink:""};
 const OPT_NAMES = ["אופציה א׳","אופציה ב׳"];
 const S = {
-  cfg:{...DEF_CFG}, signups:[], ratings:[], teams:null, votes:[],
+  cfg:{...DEF_CFG}, cfgLoaded:false, signups:[], signupsLoaded:false, ratings:[], apart:[], teams:null, votes:[], paid:new Set(), history:[],
   uid:null, isAdmin:false, loading:true, error:null,
-  tab: location.hash==="#teams" ? "teams" : "list",
+  tab: location.hash==="#teams" ? "teams" : location.hash==="#stats" ? "stats" : "list",
   showPaste:false, confirmReset:false, confirmCancel:false, copyText:null, busy:false,
-  subSel:new Set(), showColors:false, showImg:null, showText:null
+  subSel:new Set(), showColors:false, showImg:null, showText:null,
+  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false
 };
+try{ S.promoted = JSON.parse(localStorage.getItem("promoted")||"[]"); }catch(e){}
 
 // ---------- utils ----------
 const $ = id => document.getElementById(id);
@@ -206,6 +251,7 @@ function h(tag, attrs, ...kids){
     if(k.startsWith("on")) e.addEventListener(k.slice(2), v);
     else if(k==="class") e.className = v;
     else if(k==="style") e.style.cssText = v;
+    else if(k==="value") e.value = v;
     else e.setAttribute(k, v===true ? "" : v);
   }
   for(const k of kids.flat()){ if(k==null||k===false) continue; e.append(k.nodeType ? k : document.createTextNode(String(k))); }
@@ -215,14 +261,24 @@ const norm = s => String(s||"").trim().replace(/\s+/g," ").toLowerCase();
 const clean = s => String(s||"").trim().replace(/\s+/g," ").slice(0,40);
 function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; }
 let toastT;
-function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove("show"),2800); }
+function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove("show"),3000); }
+const DAYS=["ראשון","שני","שלישי","רביעי","חמישי","שישי","שבת"];
 function fmtTime(ms){
   if(!ms) return "עכשיו";
-  const d=new Date(ms); const days=["א׳","ב׳","ג׳","ד׳","ה׳","ו׳","ש׳"];
-  return "יום "+days[d.getDay()]+" "+String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");
+  const d=new Date(ms);
+  return "יום "+["א׳","ב׳","ג׳","ד׳","ה׳","ו׳","ש׳"][d.getDay()]+" "+String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");
 }
-function ratingOf(name){ const r = S.ratings.find(x=>norm(x.n)===norm(name)); return r ? r.r : DEF_RATING; }
-// palette index per team slot: unique, length k
+function fmtFull(ms){ const d=new Date(ms); return `יום ${DAYS[d.getDay()]} ${d.getDate()}.${d.getMonth()+1} ב-${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; }
+function fmtDate(ms){ const d=new Date(ms); return `${d.getDate()}.${d.getMonth()+1}`; }
+function fmtLeft(ms){
+  const s=Math.max(0,Math.floor(ms/1000)), d=Math.floor(s/86400), hh=Math.floor(s%86400/3600), mm=Math.floor(s%3600/60), ss=s%60;
+  if(d) return `${d} ימים ו-${hh} שעות`;
+  if(hh) return `${hh}:${String(mm).padStart(2,"0")}:${String(ss).padStart(2,"0")}`;
+  return `${mm}:${String(ss).padStart(2,"0")}`;
+}
+const rosterOf = name => S.ratings.find(x=>norm(x.n)===norm(name));
+function ratingOf(name){ const r=rosterOf(name); return r ? r.r : DEF_RATING; }
+const isGK = name => !!(rosterOf(name)||{}).gk;
 function colorSlots(k){
   const src = Array.isArray(S.cfg.colors) ? S.cfg.colors : [];
   const out=[], used=new Set();
@@ -233,6 +289,9 @@ function colorSlots(k){
 const colorOf = i => COLORS[colorSlots(Math.max(i+1, S.cfg.numTeams))[i]];
 const lsGet = k => { try{ return localStorage.getItem(k)||""; }catch(e){ return ""; } };
 const lsSet = (k,v) => { try{ localStorage.setItem(k,v); }catch(e){} };
+const isOpen = () => !!S.cfg.open || (!!S.cfg.openAt && Date.now()>=S.cfg.openAt);
+const game = () => ({day:"",time:"",place:"",...(S.cfg.game||{})});
+function gameLine(){ const g=game(); return [g.day && `📅 ${g.day}`, g.time && `⏰ ${g.time}`, g.place && `📍 ${g.place}`].filter(Boolean).join(" · "); }
 async function run(fn, okMsg){
   try{ await fn(); if(okMsg) toast(okMsg); return true; }
   catch(e){
@@ -246,28 +305,30 @@ async function run(fn, okMsg){
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const cfgRef = doc(db,"config","main"), teamsRef = doc(db,"teams","current"), ratRef = doc(db,"ratings","main");
-const signCol = collection(db,"signups"), votesCol = collection(db,"votes");
+const cfgRef = doc(db,"config","main"), teamsRef = doc(db,"teams","current"), ratRef = doc(db,"ratings","main"), paidRef = doc(db,"payments","current");
+const signCol = collection(db,"signups"), votesCol = collection(db,"votes"), histCol = collection(db,"history");
 
 // ---------- data ----------
 let ratUnsub = null;
 function normTeams(d){
   if(!d) return null;
   if(Array.isArray(d.options) && d.options.length) return {at:d.at||0, options:d.options, status:d.status||"draft", chosen:d.chosen??null};
-  if(Array.isArray(d.teams) && d.teams.length) // older format
+  if(Array.isArray(d.teams) && d.teams.length)
     return {at:d.at||0, options:[{teams:d.teams.map(t=>({players:t.players||[], subs:t.subs||[]}))}], status:"final", chosen:0};
   return null;
 }
 function subscribe(){
-  onSnapshot(cfgRef, s=>{ S.cfg = s.exists() ? {...DEF_CFG, ...s.data()} : {...DEF_CFG}; render(); }, e=>fail(e));
+  onSnapshot(cfgRef, s=>{ S.cfg = s.exists() ? {...DEF_CFG, ...s.data()} : {...DEF_CFG}; S.cfgLoaded=true; detectPromotions(); armOpenTimer(); render(); }, e=>fail(e));
   onSnapshot(teamsRef, s=>{ S.teams = normTeams(s.exists()?s.data():null); render(); }, e=>fail(e));
   onSnapshot(query(signCol, orderBy("ts")), q=>{
     S.signups = q.docs.map(d=>{ const x=d.data({serverTimestamps:"estimate"}); return {id:d.id, name:x.name, uid:x.uid, ts:x.ts?x.ts.toMillis():Date.now(), tsRaw:x.ts}; })
       .sort((a,b)=>a.ts-b.ts);
     const ids=new Set(S.signups.map(s=>s.id)); [...S.subSel].forEach(id=>{ if(!ids.has(id)) S.subSel.delete(id); });
-    S.loading=false; S.error=null; render();
+    S.signupsLoaded=true; S.loading=false; S.error=null; detectPromotions(); render();
   }, e=>fail(e));
   onSnapshot(votesCol, q=>{ S.votes=q.docs.map(d=>({id:d.id, ...d.data()})); render(); }, e=>console.warn("votes",e));
+  onSnapshot(paidRef, s=>{ S.paid=new Set(s.exists()?(s.data().paid||[]):[]); render(); }, e=>console.warn("paid",e));
+  onSnapshot(histCol, q=>{ S.history=q.docs.map(d=>({id:d.id, ...d.data()})).sort((a,b)=>(a.at||0)-(b.at||0)); render(); }, e=>console.warn("history",e));
 }
 function fail(e){ console.error(e); S.loading=false; S.error="לא הצלחתי לטעון את הנתונים. בדוק חיבור לאינטרנט."; render(); }
 
@@ -278,7 +339,7 @@ async function checkAdmin(user){
   try{ await getDoc(doc(db,"admin","check")); S.isAdmin=true; }
   catch(e){ S.isAdmin=false; toast("החשבון הזה לא מוגדר כמארגן"); }
   if(S.isAdmin){
-    ratUnsub = onSnapshot(ratRef, s=>{ S.ratings = s.exists() ? (s.data().list||[]) : []; render(); }, ()=>{});
+    ratUnsub = onSnapshot(ratRef, s=>{ const d=s.exists()?s.data():{}; S.ratings=d.list||[]; S.apart=d.apart||[]; render(); }, ()=>{});
     try{ const c=await getDoc(cfgRef); if(!c.exists()) await setDoc(cfgRef, DEF_CFG); }catch(e){}
   }
   render();
@@ -291,13 +352,50 @@ onAuthStateChanged(auth, async user=>{
 subscribe();
 setTimeout(()=>{ if(S.loading){ S.loading=false; S.error="הטעינה לוקחת יותר מדי זמן. בדוק חיבור לאינטרנט."; render(); } }, 10000);
 
+// auto-open timer + countdown
+let openTimer=null, cdTimer=null;
+function armOpenTimer(){
+  clearTimeout(openTimer);
+  const ms = S.cfg.openAt ? S.cfg.openAt-Date.now() : -1;
+  if(ms>0 && ms<2**31-1) openTimer=setTimeout(()=>{ render(); toast("🔓 ההרשמה נפתחה!"); }, ms+300);
+}
+function startCountdown(){
+  if(cdTimer) return;
+  cdTimer=setInterval(()=>{
+    const el=$("cd");
+    if(!el){ clearInterval(cdTimer); cdTimer=null; return; }
+    const left=(S.cfg.openAt||0)-Date.now();
+    if(left<=0){ clearInterval(cdTimer); cdTimer=null; render(); return; }
+    el.textContent=fmtLeft(left);
+  },1000);
+}
+
+// promotion detection (works across visits via localStorage)
+function detectPromotions(){
+  if(!S.cfgLoaded || !S.signupsLoaded) return;
+  const cap=S.cfg.capacity, active=S.signups.slice(0,cap), waiting=S.signups.slice(cap);
+  let prev=null; try{ prev=JSON.parse(localStorage.getItem("lastLists")||"null"); }catch(e){}
+  if(prev && Array.isArray(prev.waiting)){
+    let changed=false;
+    active.filter(s=>prev.waiting.includes(s.id)).forEach(s=>{
+      if(!S.promoted.some(p=>p.id===s.id)){ S.promoted.push({id:s.id,name:s.name}); changed=true; }
+      if(s.id===S.uid && s.uid===S.uid) toast("🎉 התפנה מקום, עלית מההמתנה! אתה משחק");
+    });
+    const ids=new Set(S.signups.map(s=>s.id));
+    const before=S.promoted.length; S.promoted=S.promoted.filter(p=>ids.has(p.id)); if(S.promoted.length!==before) changed=true;
+    if(changed) lsSet("promoted",JSON.stringify(S.promoted));
+  }
+  lsSet("lastLists", JSON.stringify({active:active.map(s=>s.id), waiting:waiting.map(s=>s.id)}));
+}
+function dismissPromo(id){ S.promoted=S.promoted.filter(p=>p.id!==id); lsSet("promoted",JSON.stringify(S.promoted)); render(); }
+
 // ---------- player actions ----------
 function mySignup(){ return S.signups.find(s=>s.uid && s.uid===S.uid && s.id===S.uid); }
 async function selfRegister(name){
   name = clean(name);
   if(!name){ toast("כתוב את השם שלך"); return; }
   if(S.signups.some(s=>norm(s.name)===norm(name))){ toast("השם הזה כבר ברשימה"); return; }
-  if(!S.cfg.open){ toast("ההרשמה סגורה כרגע"); return; }
+  if(!isOpen()){ toast("ההרשמה עוד לא נפתחה"); return; }
   if(!S.uid){ toast("רגע, מתחבר…"); return; }
   lsSet("myName", name);
   S.busy=true; render();
@@ -346,46 +444,97 @@ async function adminMove(i,d){
   await run(()=>batch.commit());
 }
 let cfgChain=Promise.resolve();
-function setCfg(p){ const c={...S.cfg,...p}; S.cfg=c; render(); cfgChain=cfgChain.then(()=>run(()=>setDoc(cfgRef,c))); }
+function setCfg(p, msg){ const c={...S.cfg,...p}; S.cfg=c; armOpenTimer(); render(); cfgChain=cfgChain.then(()=>run(()=>setDoc(cfgRef,c), msg)); }
 function pickColor(slot, c){
   const arr=colorSlots(Math.max(8, S.cfg.numTeams, slot+1));
   const j=arr.indexOf(c);
-  if(j>=0 && j!==slot) arr[j]=arr[slot];   // swap so colors stay unique
+  if(j>=0 && j!==slot) arr[j]=arr[slot];
   arr[slot]=c;
   setCfg({colors:arr});
 }
 let ratTimer;
-function setRating(name,r){
-  S.ratings = S.ratings.filter(x=>norm(x.n)!==norm(name)).concat([{n:name,r}]); render();
-  clearTimeout(ratTimer); ratTimer=setTimeout(()=>run(()=>setDoc(ratRef,{list:S.ratings})),500);
+function saveRoster(now){
+  clearTimeout(ratTimer);
+  const go=()=>run(()=>setDoc(ratRef,{list:S.ratings, apart:S.apart}));
+  if(now) go(); else ratTimer=setTimeout(go,500);
 }
-function removeFromRoster(name){ S.ratings=S.ratings.filter(x=>norm(x.n)!==norm(name)); render(); run(()=>setDoc(ratRef,{list:S.ratings})); }
+function setRating(name,r){
+  const cur=rosterOf(name);
+  S.ratings = S.ratings.filter(x=>norm(x.n)!==norm(name)).concat([{n:cur?cur.n:name, r, gk:cur?!!cur.gk:false}]); render(); saveRoster();
+}
+function toggleGK(name){
+  const cur=rosterOf(name);
+  S.ratings = S.ratings.filter(x=>norm(x.n)!==norm(name)).concat([{n:cur?cur.n:name, r:cur?cur.r:DEF_RATING, gk:!(cur&&cur.gk)}]); render(); saveRoster();
+}
+function removeFromRoster(name){ S.ratings=S.ratings.filter(x=>norm(x.n)!==norm(name)); render(); saveRoster(true); }
+function addApart(a,b){
+  if(!a||!b||norm(a)===norm(b)){ toast("בחר שני שחקנים שונים"); return; }
+  if(S.apart.some(p=>(norm(p.a)===norm(a)&&norm(p.b)===norm(b))||(norm(p.a)===norm(b)&&norm(p.b)===norm(a)))){ toast("הזוג הזה כבר קיים"); return; }
+  S.apart=S.apart.concat([{a,b}]); S.draft.apA=""; S.draft.apB=""; render(); saveRoster(true);
+}
+function removeApart(i){ S.apart=S.apart.filter((_,j)=>j!==i); render(); saveRoster(true); }
+function togglePaid(id){
+  const p=new Set(S.paid); p.has(id)?p.delete(id):p.add(id); S.paid=p; render();
+  run(()=>setDoc(paidRef,{paid:[...p]}));
+}
 async function newWeek(){
   const batch=writeBatch(db);
   S.signups.forEach(s=>batch.delete(doc(db,"signups",s.id)));
   S.votes.forEach(v=>batch.delete(doc(db,"votes",v.id)));
   batch.set(teamsRef,{options:[],at:0,status:"draft",chosen:null});
-  S.subSel.clear();
-  await run(()=>batch.commit(),"התחלנו שבוע חדש ⚽");
+  batch.set(paidRef,{paid:[]});
+  let msg="התחלנו שבוע חדש ⚽";
+  if(S.cfg.openAt){
+    let t=S.cfg.openAt; while(t<=Date.now()) t+=WEEK;
+    const c={...S.cfg, open:false, openAt:t}; S.cfg=c; batch.set(cfgRef,c);
+    msg=`שבוע חדש ⚽ ההרשמה תיפתח ${fmtFull(t)}`;
+  }
+  S.subSel.clear(); S.resDraft=null;
+  await run(()=>batch.commit(), msg);
+  armOpenTimer();
+}
+function saveDetails(){
+  const d=S.draft, g=game();
+  const ng={day:clean(d.gDay??g.day), time:clean(d.gTime??g.time), place:clean(d.gPlace??g.place).slice(0,80)};
+  const price=Math.max(0, Math.round(Number(d.price??S.cfg.price)||0));
+  const payLink=String(d.payLink??S.cfg.payLink??"").trim().slice(0,200);
+  ["gDay","gTime","gPlace","price","payLink"].forEach(k=>delete S.draft[k]);
+  setCfg({game:ng, price, payLink}, "הפרטים נשמרו ✔");
+}
+function setAutoOpen(){
+  const v=S.draft.openAt; if(!v){ toast("בחר תאריך ושעה"); return; }
+  const ms=new Date(v).getTime();
+  if(!(ms>Date.now())){ toast("בחר זמן עתידי"); return; }
+  delete S.draft.openAt;
+  setCfg({open:false, openAt:ms}, `ההרשמה תיפתח ${fmtFull(ms)}`);
 }
 
 // ---------- teams ----------
 function sizesFor(n,k){ const b=Math.floor(n/k), e=n%k; return Array.from({length:k},(_,i)=>b+(i<e?1:0)); }
-function balance(players,k){
+function balance(players,k,apart){
   k=Math.max(1,Math.min(k,players.length));
   const sizes=sizesFor(players.length,k);
-  const arr=shuffle(players.slice()).sort((a,b)=>b.r-a.r);
+  const desc=(a,b)=>b.r-a.r;
+  const allGK=shuffle(players.filter(p=>p.gk)).sort(desc);
+  const gks=allGK.slice(0,k), rest=shuffle(players.filter(p=>!p.gk).concat(allGK.slice(k).map(p=>({...p,gk:false})))).sort(desc);
   const teams=sizes.map(()=>[]);
+  shuffle([...Array(k).keys()]).slice(0,gks.length).forEach((t,i)=>teams[t].push(gks[i]));
   let idx=0,fwd=true;
   const step=()=>{ if(fwd){ if(idx===k-1) fwd=false; else idx++; } else { if(idx===0) fwd=true; else idx--; } };
-  for(const p of arr){ let g=0; while(teams[idx].length>=sizes[idx] && g++<k*3) step(); teams[idx].push(p); step(); }
+  for(const p of rest){ let g=0; while(teams[idx].length>=sizes[idx] && g++<k*3) step(); teams[idx].push(p); step(); }
+  const pairs=(apart||[]).map(x=>[norm(x.a),norm(x.b)]);
   const avg=players.reduce((a,p)=>a+p.r,0)/players.length;
   const sum=t=>t.reduce((a,p)=>a+p.r,0);
-  const cost=()=>teams.reduce((a,t)=>a+(sum(t)-t.length*avg)**2,0);
+  const cost=()=>{
+    let c=teams.reduce((a,t)=>a+(sum(t)-t.length*avg)**2,0);
+    if(pairs.length) for(const t of teams){ const ns=new Set(t.map(p=>norm(p.name))); for(const [a,b] of pairs) if(ns.has(a)&&ns.has(b)) c+=1000; }
+    return c;
+  };
   let c=cost();
-  for(let it=0;it<4000&&k>1;it++){
+  for(let it=0;it<5000&&k>1;it++){
     const a=Math.floor(Math.random()*k); let b=Math.floor(Math.random()*(k-1)); if(b>=a) b++;
     const i=Math.floor(Math.random()*teams[a].length), j=Math.floor(Math.random()*teams[b].length);
+    if(!!teams[a][i].gk !== !!teams[b][j].gk) continue;  // keep one keeper per team
     [teams[a][i],teams[b][j]]=[teams[b][j],teams[a][i]];
     const nc=cost(); if(nc<=c+1e-9) c=nc; else [teams[a][i],teams[b][j]]=[teams[b][j],teams[a][i]];
   }
@@ -393,27 +542,32 @@ function balance(players,k){
 }
 function buildOption(main, subs, k){
   const r=new Map(main.concat(subs).map(p=>[p.name,p.r]));
-  const T=balance(main,k).map(ps=>({players:ps, subs:[]}));
+  const T=balance(main,k,S.apart).map(ps=>({players:ps, subs:[]}));
   const sum=t=>t.players.concat(t.subs).reduce((a,n)=>a+(r.get(n)||DEF_RATING),0);
   subs.slice().sort((a,b)=>b.r-a.r).forEach(p=>{
     let best=0;
     T.forEach((t,i)=>{ const b=T[best]; if(t.subs.length<b.subs.length || (t.subs.length===b.subs.length && sum(t)<sum(b))) best=i; });
     T[best].subs.push(p.name);
   });
-  return {teams:T};
+  return {teams:T, gks:main.concat(subs).filter(p=>p.gk).map(p=>p.name)};
 }
 const canon = opt => opt.teams.map(t=>t.players.slice().sort().join("|")).sort().join("||");
+const player = s => ({name:s.name, r:ratingOf(s.name), gk:isGK(s.name)});
+function apartViolations(opt){
+  let v=0; for(const t of opt.teams){ const ns=new Set(t.players.map(norm)); for(const p of S.apart) if(ns.has(norm(p.a))&&ns.has(norm(p.b))) v++; } return v;
+}
 function makeTeams(){
   const cap=S.cfg.capacity, active=S.signups.slice(0,cap);
   if(active.length<2){ toast("צריך לפחות 2 שחקנים ברשימה"); return; }
   const k=Math.min(S.cfg.numTeams,active.length);
-  const main=active.map(s=>({name:s.name,r:ratingOf(s.name)}));
-  const subs=S.signups.slice(cap).filter(s=>S.subSel.has(s.id)).map(s=>({name:s.name,r:ratingOf(s.name)}));
+  const main=active.map(player);
+  const subs=S.signups.slice(cap).filter(s=>S.subSel.has(s.id)).map(player);
   const a=buildOption(main,subs,k); let b=null;
   for(let t=0;t<60 && !b;t++){ const c=buildOption(main,subs,k); if(canon(c)!==canon(a)) b=c; }
   const t={at:Date.now(), options:b?[a,b]:[a], status:"draft", chosen:null};
-  S.teams=t; render();
-  run(()=>setDoc(teamsRef,t), b?"נוצרו 2 אופציות ⚽":"נוצרה אופציה אחת (אין מספיק שחקנים לשתיים)");
+  S.teams=t; S.resDraft=null; render();
+  const bad=apartViolations(a)+(b?apartViolations(b):0);
+  run(()=>setDoc(teamsRef,t), bad ? "⚠️ לא הצלחתי להפריד את כל הזוגות של ״לא ביחד״" : (b?"נוצרו 2 אופציות ⚽":"נוצרה אופציה אחת (אין מספיק שחקנים לשתיים)"));
 }
 async function setStatus(status, chosen=null){
   if(!S.teams) return;
@@ -430,25 +584,68 @@ function optionStrength(opt){
   const avgs=opt.teams.map(t=>t.players.reduce((a,n)=>a+ratingOf(n),0)/Math.max(1,t.players.length));
   return {avgs, gap:Math.max(...avgs)-Math.min(...avgs)};
 }
+const gkSet = opt => new Set((opt.gks||[]).map(norm));
+
+// ---------- results & stats ----------
+function saveResults(){
+  const T=S.teams; if(!T||T.status!=="final") return;
+  const opt=T.options[T.chosen??0], k=opt.teams.length, slots=colorSlots(Math.max(k,S.cfg.numTeams));
+  const wins=S.resDraft||opt.teams.map(()=>0);
+  const rec={at:T.at, date:Date.now(), teams:opt.teams.map((t,i)=>({players:t.players, subs:t.subs||[], wins:wins[i]||0, color:slots[i]}))};
+  run(()=>setDoc(doc(db,"history",String(T.at)), rec), "התוצאות נשמרו 🏆");
+}
+function deleteResult(id){ run(()=>deleteDoc(doc(db,"history",id)), "התוצאה נמחקה"); }
+function computeStats(){
+  const m=new Map();
+  for(const g of S.history){
+    const teams=g.teams||[]; const max=Math.max(0,...teams.map(t=>t.wins||0));
+    teams.forEach(t=>{
+      const best = max>0 && (t.wins||0)===max;
+      (t.players||[]).concat(t.subs||[]).forEach(n=>{
+        const k=norm(n); const s=m.get(k)||{name:n, games:0, wins:0, best:0};
+        s.name=n; s.games++; s.wins+=(t.wins||0); if(best) s.best++; m.set(k,s);
+      });
+    });
+  }
+  return [...m.values()].sort((a,b)=>b.wins-a.wins || b.best-a.best || (b.wins/b.games)-(a.wins/a.games) || a.name.localeCompare(b.name,"he"));
+}
 
 // ---------- share ----------
 const pageUrl = () => location.href.split("#")[0];
 function listText(){
   const cap=S.cfg.capacity, a=S.signups.slice(0,cap), w=S.signups.slice(cap);
   let t=`⚽ כדורגל השבוע (${a.length}/${cap})\n`;
+  if(gameLine()) t+=gameLine()+"\n";
+  t+="\n";
   a.forEach((s,i)=>t+=`${i+1}. ${s.name}\n`);
   if(a.length<cap) t+=`\nנשארו ${cap-a.length} מקומות\n`;
   if(w.length){ t+=`\n⏳ רשימת המתנה:\n`; w.forEach((s,i)=>t+=`${i+1}. ${s.name}\n`); }
   t+=`\nלהרשמה: ${pageUrl()}`;
   return t.trim();
 }
-function inviteText(){ return `⚽ ההרשמה לכדורגל השבוע פתוחה!\n${S.cfg.capacity} מקומות, כל הקודם זוכה.\nנרשמים כאן: ${pageUrl()}`; }
+function inviteText(){
+  let t=`⚽ ההרשמה לכדורגל השבוע `+(isOpen()?"פתוחה!":S.cfg.openAt?`תיפתח ${fmtFull(S.cfg.openAt)}`:"תיפתח בקרוב")+"\n";
+  if(gameLine()) t+=gameLine()+"\n";
+  t+=`${S.cfg.capacity} מקומות, כל הקודם זוכה.\nנרשמים כאן: ${pageUrl()}`;
+  return t;
+}
+function promoText(name){ return `${name}, התפנה מקום בכדורגל! אתה בפנים ⚽`+(gameLine()?`\n${gameLine()}`:"")+`\n${pageUrl()}`; }
+function payRemindText(){
+  const cap=S.cfg.capacity, unpaid=S.signups.slice(0,cap).filter(s=>!S.paid.has(s.id));
+  let t=`💳 תזכורת תשלום לכדורגל (${S.cfg.price}₪)\n`;
+  t+=unpaid.map(s=>`• ${s.name}`).join("\n");
+  if(S.cfg.payLink) t+=`\n\nלתשלום: ${S.cfg.payLink}`;
+  return t+"\nתודה! 🙏";
+}
 function optionLines(opt){
-  return opt.teams.map((tm,i)=>{ const c=colorOf(i); return `${c.e} ${c.n}: ${tm.players.join(", ")}`+(tm.subs&&tm.subs.length?` (מחליפים: ${tm.subs.join(", ")})`:""); }).join("\n");
+  const gk=gkSet(opt);
+  const nm=n=>gk.has(norm(n))?`${n} 🧤`:n;
+  return opt.teams.map((tm,i)=>{ const c=colorOf(i); return `${c.e} ${c.n}: ${tm.players.map(nm).join(", ")}`+(tm.subs&&tm.subs.length?` (מחליפים: ${tm.subs.map(nm).join(", ")})`:""); }).join("\n");
 }
 function optionText(i){ return `⚽ ${OPT_NAMES[i]}\n\n${optionLines(S.teams.options[i])}`; }
 function voteText(){ return `🗳️ הצבעה על הכוחות להשבוע!\nאופציה א׳ או אופציה ב׳? מצביעים כאן:\n${pageUrl()}#teams`; }
 function finalText(){ const o=S.teams.options[S.teams.chosen??0]; return `⚽ הכוחות להשבוע\n\n${optionLines(o)}`; }
+const waHref = text => "https://wa.me/?text="+encodeURIComponent(text);
 async function copy(text){
   try{ await navigator.clipboard.writeText(text); toast("הועתק, אפשר להדביק בוואטסאפ"); S.copyText=null; render(); }
   catch(e){ S.copyText=text; render(); }
@@ -457,10 +654,9 @@ function shareRow(text){
   return h("div",null,
     h("div",{class:"share"},
       h("button",{class:"btn ghost",onclick:()=>copy(text)},"📋 העתק"),
-      h("a",{class:"btn wa",href:"https://wa.me/?text="+encodeURIComponent(text),target:"_blank",rel:"noopener"},"שלח בוואטסאפ")),
+      h("a",{class:"btn wa",href:waHref(text),target:"_blank",rel:"noopener"},"שלח בוואטסאפ")),
     S.copyText===text ? h("textarea",{class:"copybox",readonly:true,onfocus:e=>e.target.select()},text) : null);
 }
-
 
 // ---------- team image (canvas) ----------
 const IMG = {W:1080, PAD:44, GAP:22, HEAD:84, ROW:62, TOP:176};
@@ -476,7 +672,7 @@ function rrect(ctx,x,y,w,h,r){ ctx.beginPath(); if(ctx.roundRect) ctx.roundRect(
 function imgGroups(opt){ const k=opt.teams.length, per=k<=4?k:Math.ceil(k/2), g=[]; for(let i=0;i<k;i+=per) g.push(opt.teams.slice(i,i+per).map((t,j)=>({t,idx:i+j}))); return {per,groups:g}; }
 function groupH(g){ return IMG.HEAD + Math.max(1,...g.map(c=>c.t.players.length+(c.t.subs||[]).length))*IMG.ROW + 8; }
 function sectionH(sec){ const L=imgGroups(sec.opt); return (sec.label?74:0) + L.groups.reduce((a,g)=>a+groupH(g)+IMG.GAP,0); }
-function drawCol(ctx,t,idx,x,y,w,h){
+function drawCol(ctx,t,idx,x,y,w,h,gk){
   const c=colorOf(idx), light=lum(c.c)>0.62;
   ctx.save(); rrect(ctx,x,y,w,h,22); ctx.fillStyle="#fff"; ctx.fill(); ctx.clip();
   ctx.fillStyle=c.c; ctx.fillRect(x,y,w,IMG.HEAD);
@@ -488,7 +684,7 @@ function drawCol(ctx,t,idx,x,y,w,h){
   rows.forEach((r,i)=>{
     ctx.fillStyle=r.sub?"#fff3dc":(i%2?"#f4f7f2":"#fff"); ctx.fillRect(x,ry,w,IMG.ROW);
     ctx.fillStyle=r.sub?"#7a5212":"#14201a";
-    const txt=r.sub?`🔄 ${r.p}`:r.p;
+    const txt=(r.sub?"🔄 ":"")+r.p+(gk.has(norm(r.p))?" 🧤":"");
     fitText(ctx,txt,w-24,32,r.sub?500:600); ctx.fillText(txt,x+w/2,ry+IMG.ROW/2+2);
     ry+=IMG.ROW;
   });
@@ -498,22 +694,24 @@ function drawCol(ctx,t,idx,x,y,w,h){
 function buildCanvas(title, sections){
   const {W,PAD,GAP,TOP}=IMG;
   const hasSubs=sections.some(s=>s.opt.teams.some(t=>(t.subs||[]).length));
-  const H=TOP+sections.reduce((a,s)=>a+sectionH(s),0)+(hasSubs?110:70);
+  const hasGK=sections.some(s=>(s.opt.gks||[]).length);
+  const legend=[hasSubs&&"🔄 = מחליף", hasGK&&"🧤 = שוער"].filter(Boolean).join("   ");
+  const H=TOP+sections.reduce((a,s)=>a+sectionH(s),0)+(legend?110:70);
   const cv=document.createElement("canvas"); cv.width=W; cv.height=H;
   const ctx=cv.getContext("2d"); ctx.direction="rtl"; ctx.textBaseline="middle";
   ctx.fillStyle="#f2f4ef"; ctx.fillRect(0,0,W,H);
   ctx.fillStyle="#0e3b25"; ctx.fillRect(0,0,W,TOP-34);
   ctx.textAlign="center"; ctx.fillStyle="#fff"; setFont(ctx,900,58); ctx.fillText(title,W/2,62);
-  const date=new Date().toLocaleDateString("he-IL",{weekday:"long",day:"numeric",month:"numeric"});
-  ctx.fillStyle="rgba(255,255,255,.75)"; setFont(ctx,500,30); ctx.fillText(date,W/2,112);
+  const sub=gameLine() || new Date().toLocaleDateString("he-IL",{weekday:"long",day:"numeric",month:"numeric"});
+  ctx.fillStyle="rgba(255,255,255,.78)"; fitText(ctx,sub,W-80,30,500); ctx.fillText(sub,W/2,112);
   let y=TOP;
   for(const sec of sections){
     if(sec.label){ ctx.textAlign="right"; ctx.fillStyle="#14201a"; setFont(ctx,800,46); ctx.fillText(sec.label,W-PAD,y+30); y+=74; }
-    const L=imgGroups(sec.opt), n=L.per, colW=(W-2*PAD-(n-1)*GAP)/n;
-    for(const g of L.groups){ const gh=groupH(g); g.forEach((c,j)=>drawCol(ctx,c.t,c.idx,W-PAD-(j+1)*colW-j*GAP,y,colW,gh)); y+=gh+GAP; }
+    const L=imgGroups(sec.opt), n=L.per, colW=(W-2*PAD-(n-1)*GAP)/n, gk=gkSet(sec.opt);
+    for(const g of L.groups){ const gh=groupH(g); g.forEach((c,j)=>drawCol(ctx,c.t,c.idx,W-PAD-(j+1)*colW-j*GAP,y,colW,gh,gk)); y+=gh+GAP; }
   }
   ctx.textAlign="center"; ctx.fillStyle="#6b776f"; setFont(ctx,500,26);
-  if(hasSubs) ctx.fillText("🔄 = מחליף",W/2,H-80);
+  if(legend) ctx.fillText(legend,W/2,H-80);
   ctx.fillText("⚽ כדורגל שבועי",W/2,H-38);
   return cv;
 }
@@ -523,7 +721,7 @@ function imgSpec(kind){
   if(kind==="vote") return {title:"🗳️ הצבעה על הכוחות", sections:T.options.map((o,i)=>({label:OPT_NAMES[i],opt:o}))};
   const i=+kind.slice(3); return {title:`⚽ ${OPT_NAMES[i]}`, sections:[{opt:T.options[i]}]};
 }
-function imgKey(kind,spec){ return kind+"|"+JSON.stringify(spec.sections)+"|"+colorSlots(8).join(","); }
+function imgKey(kind,spec){ return kind+"|"+JSON.stringify(spec.sections)+"|"+colorSlots(8).join(",")+"|"+gameLine(); }
 function prepareImg(key,spec){
   if(readyImgs.has(key)||pendingImgs.has(key)) return;
   pendingImgs.add(key);
@@ -556,20 +754,38 @@ function imageShare(kind, text){
     textOpen && text ? shareRow(text) : null);
 }
 
+// ---------- install (home screen) ----------
+let installEvt=null;
+window.addEventListener("beforeinstallprompt", e=>{ e.preventDefault(); installEvt=e; render(); });
+const isStandalone = () => window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone===true;
+const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent);
+function installCard(){
+  if(isStandalone() || lsGet("installDismissed")) return null;
+  return h("div",{class:"card install"},
+    h("button",{class:"ic x close",title:"סגור",onclick:()=>{ lsSet("installDismissed","1"); render(); }},"×"),
+    h("b",null,"📲 שים את האפליקציה במסך הבית"),
+    installEvt
+      ? h("button",{class:"btn full",style:"margin-top:8px",onclick:async()=>{ installEvt.prompt(); try{ await installEvt.userChoice; }catch(e){} installEvt=null; render(); }},"הוסף למסך הבית")
+      : h("div",{class:"hint",style:"margin-top:4px"}, isIOS()
+          ? "בספארי: לחץ על כפתור השיתוף ⬆️ למטה, ואז ״הוסף למסך הבית״."
+          : "בכרום: לחץ על ⋮ למעלה, ואז ״הוסף למסך הבית״ או ״התקן אפליקציה״."),
+    h("div",{class:"hint",style:"margin-top:4px"},"חשוב: אחרי שהוספת, תמיד תיכנס דרך האייקון, כדי שתוכל לבטל הרשמה."));
+}
+
 // ---------- render ----------
 function render(){
-  const cap=S.cfg.capacity, n=S.signups.length, inN=Math.min(n,cap), wN=Math.max(0,n-cap);
+  const cap=S.cfg.capacity, n=S.signups.length, inN=Math.min(n,cap), wN=Math.max(0,n-cap), open=isOpen();
   $("hdr").replaceChildren(
     h("h1",null,"⚽ כדורגל שבועי"),
-    h("div",{class:"sub"}, !S.cfg.open ? "ההרשמה סגורה כרגע" : inN>=cap ? "הרשימה מלאה, אפשר להירשם להמתנה" : `נשארו ${cap-inN} מקומות`),
+    h("div",{class:"sub"}, gameLine() || (!open ? "ההרשמה סגורה כרגע" : inN>=cap ? "הרשימה מלאה, אפשר להירשם להמתנה" : `נשארו ${cap-inN} מקומות`)),
     h("div",{class:"stats"},
       h("div",{class:"stat"},h("b",null,`${inN}/${cap}`),h("span",null,"רשומים")),
       h("div",{class:"stat"},h("b",null,wN),h("span",null,"בהמתנה")),
-      h("div",{class:"stat"},h("b",null,S.cfg.numTeams),h("span",null,"קבוצות"))),
+      h("div",{class:"stat"},h("b",null,open?"פתוח":"סגור"),h("span",null,"הרשמה"))),
     h("div",{class:"bar"},h("i",{style:`width:${cap?Math.min(100,inN/cap*100):0}%`})));
 
   const voting = S.teams && S.teams.status==="voting";
-  const tabs=[["list","רשימה"],["teams", voting && !S.isAdmin ? "כוחות 🗳️" : "כוחות"]];
+  const tabs=[["list","רשימה"],["teams", voting && !S.isAdmin ? "כוחות 🗳️" : "כוחות"],["stats","טבלה"]];
   if(S.isAdmin) tabs.push(["players","שחקנים"],["settings","הגדרות"]);
   if(!tabs.find(t=>t[0]===S.tab)) S.tab="list";
   $("tabs").replaceChildren(...tabs.map(([k,l])=>h("button",{class:S.tab===k?"on":"",onclick:()=>{S.tab=k;S.copyText=null;S.confirmReset=false;render();}},l)));
@@ -577,9 +793,10 @@ function render(){
   const m=$("main");
   if(S.loading){ m.replaceChildren(h("div",{class:"loading"},"טוען…")); return; }
   const ae=document.activeElement, keepId=ae&&ae.id, val=ae&&ae.value;
-  const views={list:viewList,teams:viewTeams,players:viewPlayers,settings:viewSettings};
+  const views={list:viewList,teams:viewTeams,stats:viewStats,players:viewPlayers,settings:viewSettings};
   m.replaceChildren(...[].concat(views[S.tab]()), footer());
-  if(keepId && $(keepId)){ const el=$(keepId); if(el.tagName==="INPUT") el.value=val; el.focus(); }
+  if(keepId && $(keepId)){ const el=$(keepId); if(el.tagName==="INPUT" && el.type==="text") el.value=val; el.focus(); }
+  if($("cd")) startCountdown();
 }
 
 function footer(){
@@ -590,6 +807,44 @@ function footer(){
           try{ await signInWithPopup(auth,new GoogleAuthProvider()); }
           catch(e){ if(e.code!=="auth/popup-closed-by-user" && e.code!=="auth/cancelled-popup-request") toast("ההתחברות נכשלה. נסה לפתוח את הקישור בדפדפן (Safari/Chrome)"); }
         }},"כניסת מארגן"));
+}
+
+function gameCard(){
+  const g=game(); if(!g.day && !g.time && !g.place) return null;
+  const q=encodeURIComponent(g.place);
+  return h("div",{class:"card gamecard"},
+    h("div",{class:"gline"}, g.day?h("span",null,"📅 ",h("b",null,g.day)):null, g.time?h("span",null,"⏰ ",h("b",null,g.time)):null),
+    g.place ? h("div",{class:"gplace"},"📍 ",g.place) : null,
+    g.place ? h("div",{class:"share"},
+      h("a",{class:"btn waze",href:`https://waze.com/ul?q=${q}&navigate=yes`,target:"_blank",rel:"noopener"},"🧭 Waze"),
+      h("a",{class:"btn ghost",href:`https://www.google.com/maps/search/?api=1&query=${q}`,target:"_blank",rel:"noopener"},"🗺️ Google Maps")) : null);
+}
+
+function payCard(){
+  const price=S.cfg.price; if(!price) return null;
+  const cap=S.cfg.capacity, active=S.signups.slice(0,cap), me=mySignup(), link=S.cfg.payLink||"";
+  const isUrl=/^https?:\/\//i.test(link);
+  const payBtn = link ? (isUrl ? h("a",{class:"btn full pay",href:link,target:"_blank",rel:"noopener"},"💳 לתשלום") : h("div",{class:"hint"},"לתשלום: ",h("b",null,link))) : null;
+  if(S.isAdmin){
+    const paidN=active.filter(s=>S.paid.has(s.id)).length;
+    return h("div",{class:"card paycard"},
+      h("h2",null,"💳 תשלומים",h("span",{class:"count"},`${paidN}/${active.length} שילמו`)),
+      h("div",{class:"hint"},`נאסף ${paidN*price}₪ מתוך ${active.length*price}₪. לוחצים על 💰 ליד שחקן כדי לסמן שהוא שילם.`),
+      paidN<active.length ? h("button",{class:"linkbtn",onclick:()=>{S.showPayRemind=!S.showPayRemind;render();}},S.showPayRemind?"סגור":"📣 שלח תזכורת למי שלא שילם") : null,
+      S.showPayRemind && paidN<active.length ? shareRow(payRemindText()) : null);
+  }
+  const inGame = me && S.signups.indexOf(me)<cap;
+  return h("div",{class:"card paycard"},
+    h("h2",null,`💳 עלות: ${price}₪ למשחק`),
+    inGame ? (S.paid.has(me.id) ? h("div",{class:"paid-ok"},"✅ שילמת, תודה!") : payBtn) : payBtn);
+}
+
+function promoCards(){
+  if(!S.isAdmin || !S.promoted.length) return [];
+  return S.promoted.map(p=>h("div",{class:"card promo"},
+    h("div",{class:"promoh"},h("b",null,`⬆️ ${p.name} עלה מההמתנה`),h("button",{class:"ic x",title:"סגור",onclick:()=>dismissPromo(p.id)},"×")),
+    h("div",{class:"hint"},"תעדכן אותו שהוא משחק:"),
+    h("a",{class:"btn wa full",href:waHref(promoText(p.name)),target:"_blank",rel:"noopener",onclick:()=>setTimeout(()=>dismissPromo(p.id),500)},"שלח לו הודעה בוואטסאפ")));
 }
 
 function myCard(){
@@ -604,9 +859,16 @@ function myCard(){
         S.confirmCancel=false; selfCancel();
       }}, S.confirmCancel ? "בטוח? לחץ שוב לביטול" : "לא מגיע, בטל הרשמה"));
   }
-  if(!S.cfg.open) return h("div",{class:"card"},h("div",{class:"empty"},"🔒 ההרשמה סגורה כרגע. היא תיפתח בקרוב."));
+  if(!isOpen()){
+    if(S.cfg.openAt && S.cfg.openAt>Date.now())
+      return h("div",{class:"card countdown"},
+        h("div",{class:"hint"},"🔒 ההרשמה תיפתח "+fmtFull(S.cfg.openAt)),
+        h("div",{class:"cdbig",id:"cd"},fmtLeft(S.cfg.openAt-Date.now())),
+        h("div",{class:"hint"},"השאר את הדף פתוח, והכפתור יופיע ברגע שההרשמה תיפתח."));
+    return h("div",{class:"card"},h("div",{class:"empty"},"🔒 ההרשמה סגורה כרגע. היא תיפתח בקרוב."));
+  }
   const full=S.signups.length>=cap;
-  const inp=h("input",{id:"myName",placeholder:"השם שלך",autocomplete:"name",enterkeyhint:"go",value:lsGet("myName"),
+  const inp=h("input",{id:"myName",type:"text",placeholder:"השם שלך",autocomplete:"name",enterkeyhint:"go",value:lsGet("myName"),
     onkeydown:e=>{ if(e.key==="Enter") selfRegister(e.target.value); }});
   return h("div",{class:"card reg"},
     h("h2",null, full ? "⏳ הרשמה לרשימת המתנה" : "✋ הרשמה למשחק"),
@@ -616,10 +878,12 @@ function myCard(){
 
 function rowFor(s,i,isWait){
   const pos=isWait?i-S.cfg.capacity+1:i+1, mine=s.uid===S.uid&&s.id===S.uid;
+  const showPay=S.cfg.price>0 && !isWait, paid=S.paid.has(s.id);
   return h("li",{class:"row"+(isWait?" wait":"")+(mine?" mine":"")},
     h("div",{class:"num"},pos),
-    h("div",{class:"nm"},h("b",null,s.name+(mine?" (אתה)":"")),h("small",null,"נרשם "+fmtTime(s.ts))),
+    h("div",{class:"nm"},h("b",null,s.name+(mine?" (אתה)":"")+(showPay&&paid&&!S.isAdmin?" 💰":"")),h("small",null,"נרשם "+fmtTime(s.ts))),
     S.isAdmin ? h("div",{class:"ctl"},
+      showPay ? h("button",{class:"ic pay"+(paid?" on":""),title:paid?"שילם":"לא שילם",onclick:()=>togglePaid(s.id)},"💰") : null,
       h("button",{class:"ic",title:"למעלה",disabled:i===0,onclick:()=>adminMove(i,-1)},"▲"),
       h("button",{class:"ic",title:"למטה",disabled:i===S.signups.length-1,onclick:()=>adminMove(i,1)},"▼"),
       h("button",{class:"ic x",title:"הסר",onclick:()=>adminRemove(s)},"×")) : null);
@@ -628,12 +892,16 @@ function rowFor(s,i,isWait){
 function viewList(){
   const cap=S.cfg.capacity, out=[];
   if(S.error) out.push(h("div",{class:"note"},S.error));
+  out.push(...promoCards());
   if(S.teams && S.teams.status==="voting" && !S.isAdmin)
     out.push(h("button",{class:"card votecall",onclick:()=>{S.tab="teams";render();}},
       h("b",null,"🗳️ יש הצבעה על הכוחות!"), h("span",null, myVote()==null ? "לחץ כאן כדי להצביע" : `הצבעת ל${OPT_NAMES[myVote()]} · לחץ לצפייה`)));
+  out.push(gameCard());
   out.push(myCard());
+  out.push(payCard());
+  out.push(installCard());
   if(S.isAdmin){
-    const inp=h("input",{id:"addName",placeholder:"הוספת שחקן ידנית",autocomplete:"off",
+    const inp=h("input",{id:"addName",type:"text",placeholder:"הוספת שחקן ידנית",autocomplete:"off",
       onkeydown:e=>{ if(e.key==="Enter"){ adminAdd([e.target.value]); e.target.value=""; } }});
     const signed=new Set(S.signups.map(s=>norm(s.name)));
     const regulars=S.ratings.map(r=>r.n).filter(n=>!signed.has(norm(n))).sort((a,b)=>a.localeCompare(b,"he"));
@@ -661,27 +929,29 @@ function viewList(){
 }
 
 // --- teams view ---
-function teamCard(tm,i,showPow){
-  const c=colorOf(i);
+function teamCard(tm,i,showPow,opt){
+  const c=colorOf(i), gk=gkSet(opt||{});
   const pow=showPow ? tm.players.reduce((a,n)=>a+ratingOf(n),0)/Math.max(1,tm.players.length) : null;
+  const nm=p=>gk.has(norm(p))?`${p} 🧤`:p;
   return h("div",{class:"team",style:`border-top:5px solid ${c.c==="#ffffff"?"#d1d5db":c.c}`},
     h("div",{class:"th"},h("span",{class:"sw",style:`background:${c.c}`}),c.n,
       h("small",null,`${tm.players.length} שחקנים`+(pow!=null?` · כוח ${pow.toFixed(1)}`:""))),
-    h("ul",null,tm.players.map(p=>h("li",null,p)),
-      (tm.subs||[]).map(p=>h("li",{class:"sub"},"🔄 "+p))));
+    h("ul",null,tm.players.map(p=>h("li",null,nm(p))),
+      (tm.subs||[]).map(p=>h("li",{class:"sub"},"🔄 "+nm(p)))));
 }
 function optionBlock(opt, idx, mode){
-  // mode: admin | vote
   const v=roundVotes(), cnt=v.filter(x=>x.choice===idx).length, total=v.length;
   const voting=S.teams.status==="voting", mine=myVote()===idx;
   const st=S.isAdmin?optionStrength(opt):null;
+  const bad=S.isAdmin?apartViolations(opt):0;
   return h("div",{class:"opt"+(mine?" mine":"")},
     S.teams.options.length>1 ? h("div",{class:"opth"},
       h("b",null,OPT_NAMES[idx]),
       st ? h("small",null,`פער כוח ${st.gap.toFixed(2)}`) : null,
       voting ? h("span",{class:"vcount"},cnt===1?"קול אחד":`${cnt} קולות`) : null) : null,
+    bad ? h("div",{class:"stale",style:"margin-top:6px"},`⚠️ ${bad} זוגות ״לא ביחד״ באותה קבוצה`) : null,
     voting && total ? h("div",{class:"vbar"},h("i",{style:`width:${cnt/total*100}%`})) : null,
-    h("div",{class:"teams"},opt.teams.map((tm,i)=>teamCard(tm,i,S.isAdmin))),
+    h("div",{class:"teams"},opt.teams.map((tm,i)=>teamCard(tm,i,S.isAdmin,opt))),
     mode==="vote" ? h("button",{class:"btn full big"+(mine?" chosen":""),style:"margin-top:10px",onclick:()=>vote(idx)}, mine?`✔ הצבעת ל${OPT_NAMES[idx]}`:`אני בעד ${OPT_NAMES[idx]}`) : null,
     mode==="admin" ? h("div",null,
       h("div",{class:"hint",style:"margin-top:10px"}, S.teams.options.length>1 ? "שליחת האופציה הזו בנפרד:" : "שליחה:"),
@@ -693,9 +963,10 @@ function splitControls(){
   const k=Math.min(S.cfg.numTeams,Math.max(1,active.length)), sz=sizesFor(active.length,k);
   const slots=colorSlots(S.cfg.numTeams);
   const subsN=waiting.filter(s=>S.subSel.has(s.id)).length;
+  const gkN=active.filter(s=>isGK(s.name)).length;
   return h("div",{class:"card"},
     h("h2",null,"🎲 חלוקת כוחות"),
-    h("div",{class:"hint"},active.length?`${active.length} שחקנים ל-${k} קבוצות (${[...new Set(sz)].sort((a,b)=>b-a).join(" / ")} בקבוצה)`+(subsN?` + ${subsN} מחליפים`:"")+". יתקבלו 2 אופציות מאוזנות לפי הדירוגים.":"אין עדיין שחקנים ברשימה."),
+    h("div",{class:"hint"},active.length?`${active.length} שחקנים ל-${k} קבוצות (${[...new Set(sz)].sort((a,b)=>b-a).join(" / ")} בקבוצה)`+(subsN?` + ${subsN} מחליפים`:"")+(gkN?` · ${gkN} שוערים 🧤`:"")+(S.apart.length?` · ${S.apart.length} זוגות ״לא ביחד״`:"")+". יתקבלו 2 אופציות מאוזנות.":"אין עדיין שחקנים ברשימה."),
     h("button",{class:"linkbtn",onclick:()=>{S.showColors=!S.showColors;render();}},
       S.showColors?"סגור צבעים":"🎨 צבעי הקבוצות ", !S.showColors ? slots.map(c=>h("span",{class:"dot",style:`background:${COLORS[c].c}`})) : null),
     S.showColors ? h("div",{class:"colors"}, slots.map((cur,slot)=>h("div",{class:"crow"},
@@ -705,6 +976,22 @@ function splitControls(){
       h("div",{class:"hint"},"🔄 לצרף מרשימת ההמתנה כמחליפים? (לחץ לסימון)"),
       h("div",{class:"chips"},waiting.map(s=>h("button",{class:"chip"+(S.subSel.has(s.id)?" on":""),onclick:()=>{ S.subSel.has(s.id)?S.subSel.delete(s.id):S.subSel.add(s.id); render(); }},(S.subSel.has(s.id)?"✔ ":"")+s.name)))) : null,
     h("button",{class:"btn full big",style:"margin-top:12px",onclick:makeTeams},S.teams?"🔄 צור אופציות חדשות":"⚽ צור 2 אופציות לכוחות"));
+}
+function resultsCard(){
+  const T=S.teams, opt=T.options[T.chosen??0];
+  const saved=S.history.find(x=>x.id===String(T.at));
+  if(S.resFor!==T.at){ S.resFor=T.at; S.resDraft = saved ? opt.teams.map((_,i)=>(saved.teams[i]||{}).wins||0) : opt.teams.map(()=>0); }
+  const d=S.resDraft;
+  return h("div",{class:"card"},
+    h("h2",null,"🏆 תוצאות הערב", saved?h("span",{class:"count"},"✔ נשמר"):null),
+    h("div",{class:"hint"},"כמה משחקים כל קבוצה ניצחה? התוצאות נכנסות לטבלה."),
+    opt.teams.map((t,i)=>{ const c=colorOf(i); return h("div",{class:"stepper"},
+      h("div",{class:"lbl"},h("b",null,h("span",{class:"dot",style:`background:${c.c};margin-inline-end:6px`}),c.n)),
+      h("div",{class:"ctrl"},
+        h("button",{onclick:()=>{ if(d[i]>0){ d[i]--; render(); } }},"−"),
+        h("output",null,d[i]),
+        h("button",{onclick:()=>{ d[i]++; render(); }},"+"))); }),
+    h("button",{class:"btn full",style:"margin-top:10px",onclick:saveResults}, saved?"💾 עדכן תוצאות":"💾 שמור תוצאות"));
 }
 function viewTeams(){
   const out=[], T=S.teams, cap=S.cfg.capacity, active=S.signups.slice(0,cap);
@@ -720,11 +1007,14 @@ function viewTeams(){
   }
 
   if(T.status==="final"){
-    const idx=T.chosen??0;
+    const idx=T.chosen??0, opt=T.options[idx];
     out.push(h("div",{class:"banner final"},"✅ אלה הכוחות להשבוע"+(T.options.length>1?` (${OPT_NAMES[idx]})`:"")));
-    out.push(h("div",{class:"teams"},T.options[idx].teams.map((tm,i)=>teamCard(tm,i,S.isAdmin))));
-    if(S.isAdmin) out.push(h("div",{class:"card"},h("h2",null,"📤 שליחת הכוחות"),imageShare("final", finalText()),
-      T.options.length>1 ? h("button",{class:"linkbtn",onclick:()=>setStatus("draft")},"↩ חזור לשתי האופציות") : null));
+    out.push(h("div",{class:"teams"},opt.teams.map((tm,i)=>teamCard(tm,i,S.isAdmin,opt))));
+    if(S.isAdmin){
+      out.push(h("div",{class:"card"},h("h2",null,"📤 שליחת הכוחות"),imageShare("final", finalText()),
+        T.options.length>1 ? h("button",{class:"linkbtn",onclick:()=>setStatus("draft")},"↩ חזור לשתי האופציות") : null));
+      out.push(resultsCard());
+    }
     return out;
   }
 
@@ -744,7 +1034,6 @@ function viewTeams(){
     return out;
   }
 
-  // draft (admin only)
   out.push(h("div",{class:"banner"}, T.options.length>1 ? "👀 רק אתה רואה את האופציות. בחר אחת, או פתח הצבעה לשחקנים." : "👀 רק אתה רואה את החלוקה. קבע אותה כדי שכולם יראו."));
   T.options.forEach((o,i)=>out.push(optionBlock(o,i,"admin")));
   if(T.options.length>1) out.push(h("div",{class:"card"},
@@ -754,43 +1043,99 @@ function viewTeams(){
   return out;
 }
 
+// --- stats view ---
+function viewStats(){
+  const st=computeStats(), out=[];
+  if(!st.length){
+    out.push(h("div",{class:"card"},h("h2",null,"🏆 טבלת העונה"),h("div",{class:"empty"},"עוד אין תוצאות. אחרי כל משחק המארגן מזין כמה ניצחה כל קבוצה, והטבלה מתעדכנת.")));
+    return out;
+  }
+  const medal=i=>["🥇","🥈","🥉"][i]||String(i+1);
+  out.push(h("div",{class:"card"},
+    h("h2",null,"🏆 טבלת העונה",h("span",{class:"count"},`${S.history.length} ערבים`)),
+    h("table",{class:"stats-t"},
+      h("thead",null,h("tr",null,h("th",null,"#"),h("th",{class:"tn"},"שחקן"),h("th",null,"ערבים"),h("th",null,"ניצחונות"),h("th",null,"👑"))),
+      h("tbody",null,st.map((s,i)=>h("tr",{class:i<3?"top":""},
+        h("td",null,medal(i)),h("td",{class:"tn"},s.name),h("td",null,s.games),h("td",null,h("b",null,s.wins)),h("td",null,s.best))))),
+    h("div",{class:"hint",style:"margin-top:8px"},"ניצחונות = כמה משחקים הקבוצה שלך ניצחה. 👑 = ערבים שהקבוצה שלך הייתה הכי טובה.")));
+  out.push(h("div",{class:"card"},
+    h("h2",null,"📜 משחקים קודמים"),
+    S.history.slice().reverse().map(g=>h("div",{class:"hrow"},
+      h("span",{class:"hdate"},fmtDate(g.date||g.at)),
+      h("span",{class:"hres"},(g.teams||[]).map(t=>{ const c=COLORS[(t.color??0)%COLORS.length]; return `${c.e} ${t.wins||0}`; }).join("  ")),
+      S.isAdmin ? h("button",{class:"ic x",title:"מחק",onclick:()=>deleteResult(g.id)},"×") : null))));
+  return out;
+}
+
 function viewPlayers(){
   const all=new Map();
   S.ratings.forEach(r=>all.set(norm(r.n),r.n));
   S.signups.forEach(s=>{ if(!all.has(norm(s.name))) all.set(norm(s.name),s.name); });
   const names=[...all.values()].sort((a,b)=>a.localeCompare(b,"he"));
-  const inp=h("input",{id:"rosterName",placeholder:"הוסף שחקן קבוע",autocomplete:"off",
+  const inp=h("input",{id:"rosterName",type:"text",placeholder:"הוסף שחקן קבוע",autocomplete:"off",
     onkeydown:e=>{ if(e.key==="Enter"&&e.target.value.trim()){ setRating(clean(e.target.value),DEF_RATING); e.target.value=""; } }});
+  const sel=(key)=>h("select",{class:"sel",onchange:e=>{S.draft[key]=e.target.value;}},
+    h("option",{value:""},"בחר שחקן"), names.map(n=>{ const o=h("option",{value:n},n); if(S.draft[key]===n) o.selected=true; return o; }));
   return [
     h("div",{class:"card"},
       h("h2",null,"⭐ דירוג שחקנים"),
-      h("div",{class:"hint"},`הדירוג (1 עד ${RATING_MAX}) משמש רק לאיזון הקבוצות, ורק אתה רואה אותו. שחקן בלי דירוג נחשב ${DEF_RATING}.`),
+      h("div",{class:"hint"},`הדירוג (1 עד ${RATING_MAX}) משמש רק לאיזון הקבוצות, ורק אתה רואה אותו. שחקן בלי דירוג נחשב ${DEF_RATING}. לחץ על 🧤 כדי לסמן שוער, והאפליקציה תדאג לשוער אחד בכל קבוצה.`),
       h("div",{class:"addrow",style:"margin-top:10px"},inp,h("button",{class:"btn",onclick:()=>{ if(inp.value.trim()){ setRating(clean(inp.value),DEF_RATING); inp.value=""; } }},"הוסף"))),
     h("div",{class:"card"},
       names.length ? h("div",null,names.map(n=>{
-        const r=S.ratings.find(x=>norm(x.n)===norm(n)), val=r?r.r:0;
+        const r=rosterOf(n), val=r?r.r:0, gk=!!(r&&r.gk);
         return h("div",{class:"prow"},
-          h("div",{class:"nm"},h("b",null,n),h("small",{class:"unr"}, r?`דירוג ${val}`:"לא דורג")),
+          h("div",{class:"nm"},h("b",null,n),h("small",{class:"unr"}, (r?`דירוג ${val}`:"לא דורג")+(gk?" · שוער":""))),
+          h("button",{class:"ic gk"+(gk?" on":""),title:"שוער",onclick:()=>toggleGK(n)},"🧤"),
           h("div",{class:"stars"},Array.from({length:RATING_MAX},(_,k)=>k+1).map(i=>h("button",{class:i<=val?"on":"","aria-label":String(i),onclick:()=>setRating(n,i)},"★"))),
           r?h("button",{class:"ic x",title:"הסר מהקבועים",onclick:()=>removeFromRoster(n)},"×"):h("span",{style:"width:32px"}));
-      })) : h("div",{class:"empty"},"אין עדיין שחקנים."))
+      })) : h("div",{class:"empty"},"אין עדיין שחקנים.")),
+    h("div",{class:"card"},
+      h("h2",null,"🚫 לא ביחד"),
+      h("div",{class:"hint"},"זוגות שהחלוקה תשים בקבוצות שונות."),
+      names.length>1 ? h("div",{class:"aprow"}, sel("apA"), h("span",null,"⟷"), sel("apB"),
+        h("button",{class:"btn",onclick:()=>addApart(S.draft.apA,S.draft.apB)},"הוסף")) : h("div",{class:"hint"},"צריך לפחות שני שחקנים."),
+      S.apart.length ? h("div",{style:"margin-top:8px"},S.apart.map((p,i)=>h("div",{class:"prow"},
+        h("div",{class:"nm"},h("b",null,`${p.a} ⟷ ${p.b}`)),
+        h("button",{class:"ic x",title:"הסר",onclick:()=>removeApart(i)},"×")))) : null)
   ];
 }
 
 function viewSettings(){
   const c=S.cfg, k=c.numTeams, cap=c.capacity, per=[...new Set(sizesFor(cap,k))].sort((a,b)=>b-a).join(" / ");
+  const g=game(), d=S.draft;
+  const field=(key,label,cur,attrs={})=>h("label",{class:"field"},h("span",null,label),
+    h("input",{id:"f_"+key,type:attrs.type||"text",value:d[key]??cur??"",placeholder:attrs.ph||"",inputmode:attrs.im||null,dir:attrs.dir||null,oninput:e=>{d[key]=e.target.value;}}));
   const stepper=(lbl,sub,v,min,max,key)=>h("div",{class:"stepper"},
     h("div",{class:"lbl"},h("b",null,lbl),h("small",null,sub)),
     h("div",{class:"ctrl"},
       h("button",{onclick:()=>v>min&&setCfg({[key]:v-1})},"−"),
       h("output",null,v),
       h("button",{onclick:()=>v<max&&setCfg({[key]:v+1})},"+")));
+  const open=isOpen(), future=c.openAt && c.openAt>Date.now();
+  const toLocalInput=ms=>{ const t=new Date(ms-new Date(ms).getTimezoneOffset()*60000); return t.toISOString().slice(0,16); };
   return [
     h("div",{class:"card"},
       h("h2",null,"🔓 הרשמה"),
       h("div",{class:"stepper"},
-        h("div",{class:"lbl"},h("b",null,c.open?"ההרשמה פתוחה":"ההרשמה סגורה"),h("small",null,c.open?"שחקנים יכולים להירשם עכשיו":"אף אחד לא יכול להירשם")),
-        h("button",{class:"btn "+(c.open?"warn":""),onclick:()=>setCfg({open:!c.open})},c.open?"סגור הרשמה":"פתח הרשמה"))),
+        h("div",{class:"lbl"},h("b",null,open?"ההרשמה פתוחה":"ההרשמה סגורה"),h("small",null,future?`תיפתח אוטומטית ${fmtFull(c.openAt)}`:open?"שחקנים יכולים להירשם עכשיו":"אף אחד לא יכול להירשם")),
+        h("button",{class:"btn "+(open?"warn":""),onclick:()=>setCfg(open?{open:false,openAt:null}:{open:true,openAt:null})},open?"סגור הרשמה":"פתח עכשיו")),
+      h("div",{class:"sub-h"},"⏰ פתיחה אוטומטית"),
+      h("div",{class:"hint"},"ההרשמה תיפתח לבד בזמן שתבחר. כשלוחצים ״פתח רשימה חדשה״ היא מתוזמנת אוטומטית לאותה שעה בשבוע הבא."),
+      h("div",{class:"addrow",style:"margin-top:8px"},
+        h("input",{id:"f_openAt",type:"datetime-local",value:d.openAt ?? (future?toLocalInput(c.openAt):""),oninput:e=>{d.openAt=e.target.value;}}),
+        h("button",{class:"btn",onclick:setAutoOpen},"קבע")),
+      future ? h("button",{class:"linkbtn",onclick:()=>setCfg({openAt:null},"הפתיחה האוטומטית בוטלה")},"בטל פתיחה אוטומטית") : null),
+    h("div",{class:"card"},
+      h("h2",null,"📍 פרטי המשחק"),
+      h("div",{class:"hint"},"יופיעו לכולם בראש הדף, עם כפתור ניווט."),
+      field("gDay","יום",g.day,{ph:"למשל: יום שלישי"}),
+      field("gTime","שעה",g.time,{ph:"למשל: 21:00"}),
+      field("gPlace","מקום",g.place,{ph:"למשל: מגרש בית ספר אורט, חולון"}),
+      h("div",{class:"sub-h"},"💳 תשלום"),
+      field("price","מחיר לשחקן (₪), 0 = בלי מעקב תשלומים",c.price||"",{type:"number",im:"numeric",ph:"0"}),
+      field("payLink","קישור לביט / פייבוקס, או מספר טלפון",c.payLink,{ph:"https://...",dir:"ltr"}),
+      h("button",{class:"btn full",style:"margin-top:10px",onclick:saveDetails},"💾 שמור פרטים")),
     h("div",{class:"card"},
       h("h2",null,"⚙️ הגדרות המשחק"),
       stepper("כמות שחקנים","מי שמעבר לזה נכנס להמתנה",cap,2,60,"capacity"),
@@ -798,7 +1143,7 @@ function viewSettings(){
       h("div",{class:"chips"},[[18,3],[12,2],[15,3],[20,4]].map(([a,b])=>h("button",{class:"chip",onclick:()=>setCfg({capacity:a,numTeams:b})},`${a} · ${b} קבוצות`)))),
     h("div",{class:"card"},
       h("h2",null,"🗓️ שבוע חדש"),
-      h("div",{class:"hint"},"מוחק את הנרשמים, הכוחות וההצבעות. הדירוגים והצבעים נשמרים."),
+      h("div",{class:"hint"},"מוחק את הנרשמים, הכוחות, ההצבעות והתשלומים. הדירוגים, הטבלה והפרטים נשמרים."),
       h("button",{class:"btn warn full",style:"margin-top:12px",onclick:()=>{
         if(!S.confirmReset){ S.confirmReset=true; render(); setTimeout(()=>{S.confirmReset=false;render();},4000); return; }
         S.confirmReset=false; S.tab="list"; newWeek(); render();
@@ -806,7 +1151,7 @@ function viewSettings(){
   ];
 }
 
-window.addEventListener("hashchange",()=>{ if(location.hash==="#teams"){ S.tab="teams"; render(); } });
+window.addEventListener("hashchange",()=>{ const t=location.hash.slice(1); if(t==="teams"||t==="stats"){ S.tab=t; render(); } });
 render();
 
 </script>
