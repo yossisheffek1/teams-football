@@ -151,6 +151,9 @@
   .votecall{display:block;width:100%;text-align:start;background:#fff6e6;border-color:#f1d29a}
   .votecall b{display:block;font-size:17px}
   .votecall span{color:#7a5212;font-size:14px}
+  .imgshare{margin-top:8px}
+  .imglinks{display:flex;gap:16px;justify-content:center}
+  .preview{width:100%;border-radius:12px;border:1px solid var(--line);margin-top:6px;display:block}
 </style>
 </head>
 <body>
@@ -190,7 +193,7 @@ const S = {
   uid:null, isAdmin:false, loading:true, error:null,
   tab: location.hash==="#teams" ? "teams" : "list",
   showPaste:false, confirmReset:false, confirmCancel:false, copyText:null, busy:false,
-  subSel:new Set(), showColors:false
+  subSel:new Set(), showColors:false, showImg:null, showText:null
 };
 
 // ---------- utils ----------
@@ -444,9 +447,7 @@ function optionLines(opt){
   return opt.teams.map((tm,i)=>{ const c=colorOf(i); return `${c.e} ${c.n}: ${tm.players.join(", ")}`+(tm.subs&&tm.subs.length?` (מחליפים: ${tm.subs.join(", ")})`:""); }).join("\n");
 }
 function optionText(i){ return `⚽ ${OPT_NAMES[i]}\n\n${optionLines(S.teams.options[i])}`; }
-function voteText(){
-  return `🗳️ הצבעה על הכוחות להשבוע!\n\n`+S.teams.options.map((o,i)=>`*${OPT_NAMES[i]}*\n${optionLines(o)}`).join("\n\n")+`\n\nמצביעים כאן: ${pageUrl()}#teams`;
-}
+function voteText(){ return `🗳️ הצבעה על הכוחות להשבוע!\nאופציה א׳ או אופציה ב׳? מצביעים כאן:\n${pageUrl()}#teams`; }
 function finalText(){ const o=S.teams.options[S.teams.chosen??0]; return `⚽ הכוחות להשבוע\n\n${optionLines(o)}`; }
 async function copy(text){
   try{ await navigator.clipboard.writeText(text); toast("הועתק, אפשר להדביק בוואטסאפ"); S.copyText=null; render(); }
@@ -458,6 +459,101 @@ function shareRow(text){
       h("button",{class:"btn ghost",onclick:()=>copy(text)},"📋 העתק"),
       h("a",{class:"btn wa",href:"https://wa.me/?text="+encodeURIComponent(text),target:"_blank",rel:"noopener"},"שלח בוואטסאפ")),
     S.copyText===text ? h("textarea",{class:"copybox",readonly:true,onfocus:e=>e.target.select()},text) : null);
+}
+
+
+// ---------- team image (canvas) ----------
+const IMG = {W:1080, PAD:44, GAP:22, HEAD:84, ROW:62, TOP:176};
+const readyImgs = new Map(), pendingImgs = new Set();
+let fontsReady=null;
+function ensureFonts(){
+  return fontsReady ||= Promise.all(["900 58px Heebo","800 40px Heebo","600 32px Heebo","500 30px Heebo"].map(f=>document.fonts.load(f))).catch(()=>{});
+}
+function lum(hex){ const n=parseInt(hex.slice(1),16); return (0.299*((n>>16)&255)+0.587*((n>>8)&255)+0.114*(n&255))/255; }
+function setFont(ctx,w,s){ ctx.font=`${w} ${s}px Heebo, Arial, sans-serif`; }
+function fitText(ctx,text,maxW,size,weight){ let s=size; setFont(ctx,weight,s); while(ctx.measureText(text).width>maxW && s>16){ s-=2; setFont(ctx,weight,s); } }
+function rrect(ctx,x,y,w,h,r){ ctx.beginPath(); if(ctx.roundRect) ctx.roundRect(x,y,w,h,r); else ctx.rect(x,y,w,h); }
+function imgGroups(opt){ const k=opt.teams.length, per=k<=4?k:Math.ceil(k/2), g=[]; for(let i=0;i<k;i+=per) g.push(opt.teams.slice(i,i+per).map((t,j)=>({t,idx:i+j}))); return {per,groups:g}; }
+function groupH(g){ return IMG.HEAD + Math.max(1,...g.map(c=>c.t.players.length+(c.t.subs||[]).length))*IMG.ROW + 8; }
+function sectionH(sec){ const L=imgGroups(sec.opt); return (sec.label?74:0) + L.groups.reduce((a,g)=>a+groupH(g)+IMG.GAP,0); }
+function drawCol(ctx,t,idx,x,y,w,h){
+  const c=colorOf(idx), light=lum(c.c)>0.62;
+  ctx.save(); rrect(ctx,x,y,w,h,22); ctx.fillStyle="#fff"; ctx.fill(); ctx.clip();
+  ctx.fillStyle=c.c; ctx.fillRect(x,y,w,IMG.HEAD);
+  if(c.c==="#ffffff"){ ctx.fillStyle="#e3e8e1"; ctx.fillRect(x,y+IMG.HEAD-3,w,3); }
+  ctx.fillStyle=light?"#14201a":"#fff"; ctx.textAlign="center";
+  fitText(ctx,c.n,w-20,42,800); ctx.fillText(c.n,x+w/2,y+IMG.HEAD/2+2);
+  let ry=y+IMG.HEAD;
+  const rows=t.players.map(p=>({p,sub:false})).concat((t.subs||[]).map(p=>({p,sub:true})));
+  rows.forEach((r,i)=>{
+    ctx.fillStyle=r.sub?"#fff3dc":(i%2?"#f4f7f2":"#fff"); ctx.fillRect(x,ry,w,IMG.ROW);
+    ctx.fillStyle=r.sub?"#7a5212":"#14201a";
+    const txt=r.sub?`🔄 ${r.p}`:r.p;
+    fitText(ctx,txt,w-24,32,r.sub?500:600); ctx.fillText(txt,x+w/2,ry+IMG.ROW/2+2);
+    ry+=IMG.ROW;
+  });
+  ctx.restore();
+  ctx.strokeStyle="#dfe5dc"; ctx.lineWidth=2; rrect(ctx,x+1,y+1,w-2,h-2,22); ctx.stroke();
+}
+function buildCanvas(title, sections){
+  const {W,PAD,GAP,TOP}=IMG;
+  const hasSubs=sections.some(s=>s.opt.teams.some(t=>(t.subs||[]).length));
+  const H=TOP+sections.reduce((a,s)=>a+sectionH(s),0)+(hasSubs?110:70);
+  const cv=document.createElement("canvas"); cv.width=W; cv.height=H;
+  const ctx=cv.getContext("2d"); ctx.direction="rtl"; ctx.textBaseline="middle";
+  ctx.fillStyle="#f2f4ef"; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle="#0e3b25"; ctx.fillRect(0,0,W,TOP-34);
+  ctx.textAlign="center"; ctx.fillStyle="#fff"; setFont(ctx,900,58); ctx.fillText(title,W/2,62);
+  const date=new Date().toLocaleDateString("he-IL",{weekday:"long",day:"numeric",month:"numeric"});
+  ctx.fillStyle="rgba(255,255,255,.75)"; setFont(ctx,500,30); ctx.fillText(date,W/2,112);
+  let y=TOP;
+  for(const sec of sections){
+    if(sec.label){ ctx.textAlign="right"; ctx.fillStyle="#14201a"; setFont(ctx,800,46); ctx.fillText(sec.label,W-PAD,y+30); y+=74; }
+    const L=imgGroups(sec.opt), n=L.per, colW=(W-2*PAD-(n-1)*GAP)/n;
+    for(const g of L.groups){ const gh=groupH(g); g.forEach((c,j)=>drawCol(ctx,c.t,c.idx,W-PAD-(j+1)*colW-j*GAP,y,colW,gh)); y+=gh+GAP; }
+  }
+  ctx.textAlign="center"; ctx.fillStyle="#6b776f"; setFont(ctx,500,26);
+  if(hasSubs) ctx.fillText("🔄 = מחליף",W/2,H-80);
+  ctx.fillText("⚽ כדורגל שבועי",W/2,H-38);
+  return cv;
+}
+function imgSpec(kind){
+  const T=S.teams; if(!T) return null;
+  if(kind==="final") return {title:"⚽ הכוחות להשבוע", sections:[{opt:T.options[T.chosen??0]}]};
+  if(kind==="vote") return {title:"🗳️ הצבעה על הכוחות", sections:T.options.map((o,i)=>({label:OPT_NAMES[i],opt:o}))};
+  const i=+kind.slice(3); return {title:`⚽ ${OPT_NAMES[i]}`, sections:[{opt:T.options[i]}]};
+}
+function imgKey(kind,spec){ return kind+"|"+JSON.stringify(spec.sections)+"|"+colorSlots(8).join(","); }
+function prepareImg(key,spec){
+  if(readyImgs.has(key)||pendingImgs.has(key)) return;
+  pendingImgs.add(key);
+  (async()=>{
+    await ensureFonts();
+    const cv=buildCanvas(spec.title,spec.sections);
+    const blob=await new Promise(r=>cv.toBlob(r,"image/png"));
+    readyImgs.set(key,{file:new File([blob],"teams.png",{type:"image/png"}), url:URL.createObjectURL(blob)});
+    pendingImgs.delete(key); render();
+  })().catch(e=>{ console.error(e); pendingImgs.delete(key); });
+}
+function downloadImg(r){ const a=document.createElement("a"); a.href=r.url; a.download="כוחות.png"; document.body.append(a); a.click(); a.remove(); toast("התמונה נשמרה. צרף אותה בוואטסאפ"); }
+function shareImg(key){
+  const r=readyImgs.get(key); if(!r){ toast("התמונה עוד בהכנה, נסה שוב"); return; }
+  const data={files:[r.file]};
+  if(navigator.canShare && navigator.canShare(data)) navigator.share(data).catch(e=>{ if(e.name!=="AbortError") downloadImg(r); });
+  else downloadImg(r);
+}
+function imageShare(kind, text){
+  const spec=imgSpec(kind); if(!spec) return null;
+  const key=imgKey(kind,spec), ready=readyImgs.get(key);
+  if(!ready) prepareImg(key,spec);
+  const open=S.showImg===key, textOpen=S.showText===key;
+  return h("div",{class:"imgshare"},
+    h("button",{class:"btn wa full",disabled:!ready,onclick:()=>shareImg(key)}, ready?"📷 שלח כתמונה בוואטסאפ":"מכין תמונה…"),
+    h("div",{class:"imglinks"},
+      ready ? h("button",{class:"linkbtn",onclick:()=>{S.showImg=open?null:key;render();}}, open?"הסתר תצוגה":"👁️ הצג את התמונה") : null,
+      text ? h("button",{class:"linkbtn",onclick:()=>{S.showText=textOpen?null:key;render();}}, textOpen?"סגור":"✏️ שלח כטקסט") : null),
+    open && ready ? h("img",{class:"preview",src:ready.url,alt:"תצוגה מקדימה"}) : null,
+    textOpen && text ? shareRow(text) : null);
 }
 
 // ---------- render ----------
@@ -588,8 +684,8 @@ function optionBlock(opt, idx, mode){
     h("div",{class:"teams"},opt.teams.map((tm,i)=>teamCard(tm,i,S.isAdmin))),
     mode==="vote" ? h("button",{class:"btn full big"+(mine?" chosen":""),style:"margin-top:10px",onclick:()=>vote(idx)}, mine?`✔ הצבעת ל${OPT_NAMES[idx]}`:`אני בעד ${OPT_NAMES[idx]}`) : null,
     mode==="admin" ? h("div",null,
-      S.teams.options.length>1 ? h("div",{class:"hint",style:"margin-top:10px"},"שליחת האופציה הזו בנפרד:") : null,
-      S.teams.options.length>1 ? shareRow(optionText(idx)) : null,
+      h("div",{class:"hint",style:"margin-top:10px"}, S.teams.options.length>1 ? "שליחת האופציה הזו בנפרד:" : "שליחה:"),
+      imageShare("opt"+idx, optionText(idx)),
       h("button",{class:"btn full",style:"margin-top:8px",onclick:()=>setStatus("final",idx)}, S.teams.options.length>1?`✔ קבע את ${OPT_NAMES[idx]}`:"✔ קבע את החלוקה")) : null);
 }
 function splitControls(){
@@ -627,7 +723,7 @@ function viewTeams(){
     const idx=T.chosen??0;
     out.push(h("div",{class:"banner final"},"✅ אלה הכוחות להשבוע"+(T.options.length>1?` (${OPT_NAMES[idx]})`:"")));
     out.push(h("div",{class:"teams"},T.options[idx].teams.map((tm,i)=>teamCard(tm,i,S.isAdmin))));
-    if(S.isAdmin) out.push(h("div",{class:"card"},h("h2",null,"📤 שליחת הכוחות"),shareRow(finalText()),
+    if(S.isAdmin) out.push(h("div",{class:"card"},h("h2",null,"📤 שליחת הכוחות"),imageShare("final", finalText()),
       T.options.length>1 ? h("button",{class:"linkbtn",onclick:()=>setStatus("draft")},"↩ חזור לשתי האופציות") : null));
     return out;
   }
@@ -639,7 +735,9 @@ function viewTeams(){
     T.options.forEach((o,i)=>out.push(optionBlock(o,i, S.isAdmin?"admin":"vote")));
     if(S.isAdmin) out.push(h("div",{class:"card"},
       h("h2",null,"🗳️ ניהול ההצבעה"),
-      h("div",{class:"hint"},"שלח לקבוצה את שתי האופציות עם קישור להצבעה:"),
+      h("div",{class:"hint"},"1. שלח לקבוצה תמונה של שתי האופציות:"),
+      imageShare("vote", null),
+      h("div",{class:"hint",style:"margin-top:12px"},"2. שלח את הקישור להצבעה:"),
       shareRow(voteText()),
       h("button",{class:"btn full",style:"margin-top:10px",onclick:closeVoting},"סגור הצבעה וקבע את המנצחת"),
       h("button",{class:"linkbtn",onclick:()=>setStatus("draft")},"בטל הצבעה")));
