@@ -222,6 +222,8 @@
   .nm.click{cursor:pointer}
   .phedit{background:#f7f9ff;border-radius:12px;padding:8px 10px;margin:2px 0 8px}
   .phedit input{flex:1;min-width:0;border:1.5px solid var(--line);border-radius:12px;padding:10px 12px;background:#fff}
+  .navrow{display:flex;justify-content:center;align-items:center;gap:14px;flex-wrap:wrap;margin-top:18px;font-size:13.5px;color:var(--muted)}
+  .navrow a{color:var(--accent);font-weight:600;text-decoration:none}
 </style>
 </head>
 <body>
@@ -1011,15 +1013,13 @@ function footer(){
         }},"כניסת מארגן"));
 }
 
-function gameCard(){
-  const g=game(); if(!g.day && !g.time && !g.place) return null;
+function navRow(){
+  const g=game(); if(!g.place) return null;
   const q=encodeURIComponent(g.place);
-  return h("div",{class:"card gamecard"},
-    h("div",{class:"gline"}, g.day?h("span",null,"📅 ",h("b",null,g.day)):null, g.time?h("span",null,"⏰ ",h("b",null,g.time)):null),
-    g.place ? h("div",{class:"gplace"},"📍 ",g.place) : null,
-    g.place ? h("div",{class:"share"},
-      h("a",{class:"btn waze",href:`https://waze.com/ul?q=${q}&navigate=yes`,target:"_blank",rel:"noopener"},"🧭 Waze"),
-      h("a",{class:"btn ghost",href:`https://www.google.com/maps/search/?api=1&query=${q}`,target:"_blank",rel:"noopener"},"🗺️ Google Maps")) : null);
+  return h("div",{class:"navrow"},
+    h("span",null,`📍 ${g.place}`),
+    h("a",{href:`https://waze.com/ul?q=${q}&navigate=yes`,target:"_blank",rel:"noopener"},"🧭 Waze"),
+    h("a",{href:`https://www.google.com/maps/search/?api=1&query=${q}`,target:"_blank",rel:"noopener"},"🗺️ מפות"));
 }
 
 function payCard(){
@@ -1132,7 +1132,6 @@ function viewList(){
   if(S.teams && S.teams.mvpOpen && !S.isAdmin)
     out.push(h("button",{class:"card votecall mvpcall",onclick:()=>{S.tab="teams";render();}},
       h("b",null,"⭐ מי ה-MVP של הערב?"), h("span",null, myMvpVote() ? `הצבעת ל${myMvpVote()} · לחץ לשינוי` : "לחץ כאן כדי להצביע")));
-  out.push(gameCard());
   out.push(myCard());
   out.push(payCard());
   out.push(installCard());
@@ -1161,6 +1160,7 @@ function viewList(){
     h("div",{class:"hint",style:"margin-bottom:6px"},"כשמישהו מבטל, הראשון בהמתנה עולה אוטומטית."),
     h("ol",{class:"list"},w.map((s,j)=>rowFor(s,cap+j,true)))));
   if(S.signups.length) out.push(h("div",{class:"card"},h("h2",null,"📤 שיתוף הרשימה"),shareRow(listText())));
+  out.push(navRow());
   return out;
 }
 
