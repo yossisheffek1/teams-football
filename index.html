@@ -227,6 +227,13 @@
   .th.pickable{cursor:pointer}
   .pickhint{font-size:12px;font-weight:600;color:var(--accent);background:#e7f3ea;border-radius:12px;padding:2px 8px;margin-inline-start:4px}
   .teampick{padding:4px 14px 10px}
+  .team li.swappable{cursor:pointer;user-select:none;transition:transform .1s}
+  .team li.swappable:active{transform:scale(.96)}
+  .team li.sel{background:var(--accent);color:#fff;box-shadow:0 0 0 2px #fff,0 0 0 4px var(--accent)}
+  .team li.target{outline:1.5px dashed var(--accent);outline-offset:-1px}
+  .swaphint{font-size:13px;color:var(--muted);margin-top:10px}
+  .swaphint.on{background:#e7f3ea;color:var(--accent);font-weight:600;border-radius:10px;padding:8px 10px;display:flex;align-items:center;justify-content:space-between;gap:8px;position:sticky;top:58px;z-index:4}
+  .swaphint .linkbtn{padding:0}
 </style>
 </head>
 <body>
@@ -270,7 +277,7 @@ const S = {
   tab: location.hash==="#teams" ? "teams" : location.hash==="#stats" ? "stats" : "list",
   showPaste:false, confirmReset:false, confirmCancel:false, copyText:null, busy:false,
   subSel:new Set(), showColors:false, showImg:null, showText:null,
-  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false, showGuest:false, confirmGuest:false, editHist:null, histDraft:null, editPhone:null, colorPick:null, confirmDel:null, confirmResetHist:false
+  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false, showGuest:false, confirmGuest:false, editHist:null, histDraft:null, editPhone:null, colorPick:null, swapSel:null, confirmDel:null, confirmResetHist:false
 };
 try{ S.promoted = JSON.parse(localStorage.getItem("promoted")||"[]"); }catch(e){}
 let dismissedSug=new Set(); try{ dismissedSug=new Set(JSON.parse(localStorage.getItem("dismissedSug")||"[]")); }catch(e){}
@@ -1190,6 +1197,28 @@ function setTeamColor(optIdx, i, ci){
   S.teams={...T, options}; S.colorPick=null; render();
   run(()=>updateDoc(teamsRef,{options}), `הצבע עודכן ל${COLORS[ci].n} ✔`);
 }
+function pickPlayer(o,t,kind,idx,name){
+  const sel=S.swapSel;
+  if(!sel || sel.o!==o){ S.swapSel={o,t,kind,idx,name}; render(); return; }
+  if(sel.t===t && sel.kind===kind && sel.idx===idx){ S.swapSel=null; render(); return; }
+  if(sel.t===t){ S.swapSel={o,t,kind,idx,name}; render(); return; }   // same team: just change selection
+  const T=S.teams;
+  const options=T.options.map((op,j)=>{
+    if(j!==o) return op;
+    const teams=op.teams.map(x=>({...x, players:[...x.players], subs:[...(x.subs||[])]}));
+    const A=teams[sel.t][sel.kind==="sub"?"subs":"players"], B=teams[t][kind==="sub"?"subs":"players"];
+    [A[sel.idx],B[idx]]=[B[idx],A[sel.idx]];
+    return {...op, teams};
+  });
+  S.teams={...T, options}; S.swapSel=null; render();
+  run(()=>updateDoc(teamsRef,{options}), `🔁 ${sel.name} ⇄ ${name}`);
+}
+function swapHint(o){
+  const sel=S.swapSel;
+  if(sel && sel.o===o) return h("div",{class:"swaphint on"},`🔁 נבחר: ${sel.name}. עכשיו לחץ על שחקן בקבוצה אחרת להחלפה`,
+    h("button",{class:"linkbtn",onclick:()=>{S.swapSel=null;render();}},"ביטול"));
+  return h("div",{class:"swaphint"},"💡 להחלפה ידנית: לחץ על שחקן ואז על שחקן בקבוצה אחרת");
+}
 function teamCard(tm,i,showPow,opt,optIdx){
   const c=optColor(opt,i), gk=gkSet(opt||{});
   const pow=showPow ? tm.players.reduce((a,n)=>a+ratingOf(n),0)/Math.max(1,tm.players.length) : null;
@@ -1201,8 +1230,15 @@ function teamCard(tm,i,showPow,opt,optIdx){
       S.isAdmin ? h("span",{class:"pickhint"},picking?"סגור":"🎨 שנה צבע") : null,
       h("small",null,`${tm.players.length} שחקנים`+(pow!=null?` · כוח ${pow.toFixed(1)}`:""))),
     picking ? h("div",{class:"swatches teampick"},COLORS.map((col,ci)=>h("button",{class:"swatch"+(ci===cur?" on":""),"aria-label":col.n,title:col.n,style:`background:${col.c}`,onclick:e=>{ e.stopPropagation(); setTeamColor(optIdx,i,ci); }}))) : null,
-    h("ul",null,tm.players.map(p=>h("li",null,nm(p))),
-      (tm.subs||[]).map(p=>h("li",{class:"sub"},"🔄 "+nm(p)))));
+    h("ul",null,tm.players.map((p,j)=>playerChip(p,j,"player")),
+      (tm.subs||[]).map((p,j)=>playerChip(p,j,"sub"))));
+  function playerChip(p,j,kind){
+    const label=(kind==="sub"?"🔄 ":"")+nm(p);
+    if(!S.isAdmin || optIdx==null) return h("li",{class:kind==="sub"?"sub":null},label);
+    const sel=S.swapSel, on=sel && sel.o===optIdx && sel.t===i && sel.kind===kind && sel.idx===j;
+    const target=sel && sel.o===optIdx && sel.t!==i;
+    return h("li",{class:(kind==="sub"?"sub ":"")+"swappable"+(on?" sel":"")+(target?" target":""),onclick:()=>pickPlayer(optIdx,i,kind,j,p)},label);
+  }
 }
 function optionBlock(opt, idx, mode){
   const v=roundVotes(), cnt=v.filter(x=>x.choice===idx).length, total=v.length;
@@ -1216,6 +1252,7 @@ function optionBlock(opt, idx, mode){
       voting ? h("span",{class:"vcount"},cnt===1?"קול אחד":`${cnt} קולות`) : null) : null,
     bad ? h("div",{class:"stale",style:"margin-top:6px"},`⚠️ ${bad} זוגות ״לא ביחד״ באותה קבוצה`) : null,
     voting && total ? h("div",{class:"vbar"},h("i",{style:`width:${cnt/total*100}%`})) : null,
+    S.isAdmin ? swapHint(idx) : null,
     h("div",{class:"teams"},opt.teams.map((tm,i)=>teamCard(tm,i,S.isAdmin,opt,idx))),
     mode==="vote" ? h("button",{class:"btn full big"+(mine?" chosen":""),style:"margin-top:10px",onclick:()=>vote(idx)}, mine?`✔ הצבעת ל${OPT_NAMES[idx]}`:`אני בעד ${OPT_NAMES[idx]}`) : null,
     mode==="admin" ? h("div",null,
@@ -1300,6 +1337,7 @@ function viewTeams(){
     if(T.mvp) out.push(h("div",{class:"banner mvp"},`⭐ ה-MVP של הערב: ${T.mvp}`));
     if(T.mvpOpen || S.isAdmin) out.push(mvpCard(opt));
     out.push(h("div",{class:"banner final"},"✅ אלה הכוחות להשבוע"+(T.options.length>1?` (${OPT_NAMES[idx]})`:"")));
+    if(S.isAdmin) out.push(swapHint(idx));
     out.push(h("div",{class:"teams"},opt.teams.map((tm,i)=>teamCard(tm,i,S.isAdmin,opt,idx))));
     if(S.isAdmin){
       out.push(h("div",{class:"card"},h("h2",null,"📤 שליחת הכוחות"),imageShare("final", finalText()),
