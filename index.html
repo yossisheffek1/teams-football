@@ -1533,7 +1533,7 @@ function guestBox(){
 
 function rowFor(s,i,isWait){
   const pos=isWait?i-S.cfg.capacity+1:i+1, mine=s.uid===S.uid&&s.id===S.uid;
-  const showPay=(payActive()||S.cfg.price>0) && !isWait, mk=payMark(s.id), paid=!!mk;
+  const showPay=payActive() && !isWait, mk=payMark(s.id), paid=!!mk;
   return h("li",{class:"row"+(isWait?" wait":"")+(mine?" mine":"")},
     h("div",{class:"num"},pos),
     h("div",{class:"nm"},h("b",null,s.name+(mine?" (אתה)":"")+(showPay&&paid?` ${PAY_ICON[mk.m]||"✅"}`:"")),h("small",null,(s.guestOf?`👤 אורח של ${(S.signups.find(x=>x.id===s.guestOf)||{name:"שחקן"}).name} · `:"")+"נרשם "+fmtTime(s.ts))),
@@ -2131,13 +2131,10 @@ function settingsCards(){
     S.isOwner ? adminsCard() : null,
     h("div",{class:"card"},
       h("h2",null,"📍 פרטי המשחק"),
-      h("div",{class:"hint"},"יופיעו לכולם בראש הדף, עם כפתור ניווט."),
+      h("div",{class:"hint"},"יופיעו לכולם בראש הדף, וכפתורי הניווט בתחתית הרשימה."),
       field("gameAt","מועד המשחק הקרוב",c.gameAt?toLocalInput(c.gameAt):"",{type:"datetime-local"}),
       h("div",{class:"hint",style:"margin-top:4px"},"בלחיצה על ״פתח רשימה חדשה״ המועד עובר לשבוע הבא אוטומטית."),
       field("gPlace","מקום",g.place,{ph:"למשל: מגרש בית ספר אורט, חולון"}),
-      h("div",{class:"sub-h"},"💳 תשלום"),
-      field("price","מחיר לשחקן (₪), 0 = בלי מעקב תשלומים",c.price||"",{type:"number",im:"numeric",ph:"0"}),
-      field("payLink","קישור לביט / פייבוקס, או מספר טלפון",c.payLink,{ph:"https://...",dir:"ltr"}),
       h("button",{class:"btn full",style:"margin-top:10px",onclick:saveDetails},"💾 שמור פרטים")),
     h("div",{class:"card"},
       h("h2",null,"🔔 התראות לשחקנים"),
