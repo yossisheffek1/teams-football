@@ -1948,16 +1948,21 @@ function viewPlayers(){
           selfPh ? h("div",{class:"hint"},`📱 ${n} מסר בהרשמה: ${prettyPhone(selfPh)}`) : null,
           h("div",{class:"hint"},"טלפון לשליחת וואטסאפ ישיר (רק אתה רואה):"),
           h("div",{class:"addrow"},pin,h("button",{class:"btn",onclick:()=>{ setRosterPhone(n,pin.value); delete S.draft["ph:"+n]; S.editPhone=null; }},"שמור"))));
-      })) : h("div",{class:"empty"},"אין עדיין שחקנים.")),
-    h("div",{class:"card"},
-      h("h2",null,"🚫 לא ביחד"),
-      h("div",{class:"hint"},"זוגות שהחלוקה תשים בקבוצות שונות."),
-      names.length>1 ? h("div",{class:"aprow"}, sel("apA"), h("span",null,"⟷"), sel("apB"),
-        h("button",{class:"btn",onclick:()=>addApart(S.draft.apA,S.draft.apB)},"הוסף")) : h("div",{class:"hint"},"צריך לפחות שני שחקנים."),
-      S.apart.length ? h("div",{style:"margin-top:8px"},S.apart.map((p,i)=>h("div",{class:"prow"},
-        h("div",{class:"nm"},h("b",null,`${p.a} ⟷ ${p.b}`)),
-        h("button",{class:"ic x",title:"הסר",onclick:()=>removeApart(i)},"×")))) : null)
+      })) : h("div",{class:"empty"},"אין עדיין שחקנים."))
   ];
+}
+function apartCard(){
+  const names=knownNames();
+  const sel=(key)=>h("select",{class:"sel",onchange:e=>{S.draft[key]=e.target.value;}},
+    h("option",{value:""},"בחר שחקן"), names.map(n=>{ const o=h("option",{value:n},n); if(S.draft[key]===n) o.selected=true; return o; }));
+  return h("div",{class:"card"},
+    h("h2",null,"🚫 לא ביחד"),
+    h("div",{class:"hint"},"זוגות שהחלוקה תשים בקבוצות שונות. רק אתה רואה את זה."),
+    names.length>1 ? h("div",{class:"aprow"}, sel("apA"), h("span",null,"⟷"), sel("apB"),
+      h("button",{class:"btn",onclick:()=>addApart(S.draft.apA,S.draft.apB)},"הוסף")) : h("div",{class:"hint"},"צריך לפחות שני שחקנים."),
+    S.apart.length ? h("div",{style:"margin-top:8px"},S.apart.map((p,i)=>h("div",{class:"prow"},
+      h("div",{class:"nm"},h("b",null,`${p.a} ⟷ ${p.b}`)),
+      h("button",{class:"ic x",title:"הסר",onclick:()=>removeApart(i)},"×")))) : null);
 }
 
 function knownNames(){
@@ -2042,6 +2047,7 @@ function settingsSummary(title){
   if(title.includes("ביטולים")) return ((c.lockHours||0)?`חסימה ${c.lockHours} ש׳`:"בלי חסימה")+(c.allowGuests===false?" · בלי אורחים":"");
   if(title.includes("הגדרות המשחק")) return `${c.capacity} שחקנים · ${c.numTeams} קבוצות`;
   if(title.includes("שבוע חדש")) return "איפוס הרשימה";
+  if(title.includes("לא ביחד")) return S.apart.length?`${S.apart.length} זוגות`:"אין זוגות";
   return "";
 }
 function viewSettings(){
@@ -2129,6 +2135,7 @@ function settingsCards(){
     contactsCard(),
     prioCard(),
     S.isOwner ? adminsCard() : null,
+    S.isOwner ? apartCard() : null,
     h("div",{class:"card"},
       h("h2",null,"📍 פרטי המשחק"),
       h("div",{class:"hint"},"יופיעו לכולם בראש הדף, וכפתורי הניווט בתחתית הרשימה."),
