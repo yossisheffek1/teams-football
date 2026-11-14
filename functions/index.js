@@ -331,7 +331,8 @@ exports.makeTeams = onCall(async (req) => {
   if (active.length < 2) throw new HttpsError("failed-precondition", "not enough players");
   const rd = await db.doc("ratings/main").get();
   const roster = rd.exists ? rd.data().list || [] : [];
-  const apart = rd.exists ? rd.data().apart || [] : [];
+  const ap = await db.doc("admin/apart").get();
+  const apart = ap.exists ? ap.data().list || [] : (rd.exists ? rd.data().apart || [] : []);
   const info = (name) => { const r = roster.find((x) => norm(x.n) === norm(name)); return { name, r: r ? r.r : DEF_RATING, gk: !!(r && r.gk) }; };
   const subIds = new Set(Array.isArray(req.data && req.data.subs) ? req.data.subs : []);
   const main = active.map((s) => info(s.name));
