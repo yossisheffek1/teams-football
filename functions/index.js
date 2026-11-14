@@ -212,3 +212,49 @@ exports.onTeamsChange = onDocumentUpdated("teams/current", async (event) => {
     await sendAll(toks.map((t) => ({ ...t, link, title: "⭐ מי ה-MVP של הערב?", body: "היכנס והצבע לשחקן הטוב ביותר" })));
   }
 });
+
+// ---------- 4. payments ----------
+// someone paid for the pitch and asked everyone on the list to pay them back
+exports.onPaymentChange = onDocumentWritten("payments/current", async (event) => {
+  const b = (event.data.before && event.data.before.data()) || {};
+  const a = (event.data.after && event.data.after.data()) || {};
+  if (!a.payer) return;
+  const cfg = await getConfig();
+  const cap = Number(cfg.capacity) || 18;
+  const active = (await getSignups()).slice(0, cap);
+  const price = Number(a.price) || Number(cfg.price) || 0;
+
+  if (!b.payer || b.at !== a.at) {
+    const toks = await tokensFor(active.map((s) => s.uid).filter((u) => u !== a.payer.uid));
+    await sendAll(toks.map((t) => ({ ...t,
+      title: `💳 ${a.payer.name} שילם על המגרש`,
+      body: `${price}₪ לשחקן · היכנס לשלם או לסמן שהבאת מזומן` })));
+  }
+
+  if (a.remindAt && a.remindAt !== b.remindAt) {
+    const marks = await db.collection("payMarks").get();
+    const paid = new Set(marks.docs.map((d) => d.id).concat(a.paid || []));
+    const unpaid = active.filter((s) => !paid.has(s.id) && s.uid !== a.payer.uid);
+    const toks = await tokensFor(unpaid.map((s) => s.uid));
+    await sendAll(toks.map((t) => ({ ...t,
+      title: "⏰ תזכורת תשלום לכדורגל",
+      body: `עוד לא סימנת ששילמת ${price}₪ ל${a.payer.name}` })));
+  }
+});
+
+// a player marked that he paid -> tell the person who paid for the pitch
+exports.onPayMark = onDocumentWritten("payMarks/{id}", async (event) => {
+  const b = event.data.before && event.data.before.data();
+  const a = event.data.after && event.data.after.data();
+  if (!a || (b && b.m === a.m) || !["bit", "cash"].includes(a.m)) return;
+  const p = await db.doc("payments/current").get();
+  const pay = p.exists ? p.data() : null;
+  if (!pay || !pay.payer || a.by === pay.payer.uid) return;
+  const su = await db.doc(`signups/${event.params.id}`).get();
+  const name = su.exists ? su.data().name : "שחקן";
+  const toks = await tokensFor([pay.payer.uid]);
+  const price = Number(pay.price) || 0;
+  await sendAll(toks.map((t) => ({ ...t,
+    title: a.m === "cash" ? `💵 ${name} הביא לך מזומן` : `💳 ${name} שילם לך בביט`,
+    body: `${price}₪ על המגרש · אפשר לראות מי עוד לא שילם באפליקציה` })));
+});

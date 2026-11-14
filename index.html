@@ -287,6 +287,17 @@
   .tag.mid{background:#fef3c7;color:#92400e}
   .tag.lo{background:#fee2e2;color:#991b1b}
   .tag.new{background:#e0e7ff;color:#3730a3}
+  .paycard.slim{padding:10px 14px}
+  .paylist{margin-top:8px}
+  .payrow{display:flex;align-items:center;gap:8px;padding:7px 0;border-top:1px solid var(--line);font-size:14.5px}
+  .payrow:first-child{border-top:0}
+  .payrow .pn{flex:1;font-weight:600}
+  .payrow .ps{color:var(--muted);font-size:13px}
+  .payrow.ok .ps{color:var(--accent);font-weight:600}
+  .paybox{margin-top:10px}
+  .paybox .share{margin-top:8px}
+  .paylinktxt{background:#f5f0ff;border-radius:12px;padding:10px 12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .paid-ok .linkbtn{display:inline;margin-inline-start:8px;padding:0}
 </style>
 </head>
 <body>
@@ -325,12 +336,12 @@ const COLORS = [
 const DEF_CFG = {capacity:18, numTeams:3, open:true, colors:[0,1,2,3,4,5,6,7], openAt:null, game:{day:"",time:"",place:""}, price:0, payLink:"", gameAt:null, lockHours:0, allowGuests:true, pushMode:"all", priority:[], prioHours:0, prioOpen:false};
 const OPT_NAMES = ["אופציה א׳","אופציה ב׳"];
 const S = {
-  cfg:{...DEF_CFG}, cfgLoaded:false, signups:[], signupsLoaded:false, ratings:[], apart:[], teams:null, votes:[], paid:new Set(), history:[], weeks:[], mvpVotes:[], lates:[], phones:{}, pushState:"unknown",
+  cfg:{...DEF_CFG}, cfgLoaded:false, signups:[], signupsLoaded:false, ratings:[], apart:[], teams:null, votes:[], paid:new Set(), pay:{}, payMarks:{}, history:[], weeks:[], mvpVotes:[], lates:[], phones:{}, pushState:"unknown",
   uid:null, isAdmin:false, loading:true, error:null,
   tab: location.hash==="#teams" ? "teams" : location.hash==="#stats" ? "stats" : "list",
   showPaste:false, confirmReset:false, confirmCancel:false, copyText:null, busy:false,
   subSel:new Set(), showColors:false, showImg:null, showText:null,
-  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false, showGuest:false, confirmGuest:false, editHist:null, histDraft:null, editPhone:null, colorPick:null, swapSel:null, myToken:null, adminPushOk:false, lastWin:null, winBusy:false, playersView:"rate", prioBanner:null, confirmDel:null, confirmResetHist:false
+  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false, showGuest:false, confirmGuest:false, editHist:null, histDraft:null, editPhone:null, colorPick:null, swapSel:null, myToken:null, adminPushOk:false, lastWin:null, winBusy:false, playersView:"rate", prioBanner:null, payForm:false, confirmPayCancel:false, confirmDel:null, confirmResetHist:false
 };
 try{ S.promoted = JSON.parse(localStorage.getItem("promoted")||"[]"); }catch(e){}
 let dismissedSug=new Set(); try{ dismissedSug=new Set(JSON.parse(localStorage.getItem("dismissedSug")||"[]")); }catch(e){}
@@ -448,7 +459,8 @@ function subscribe(){
     S.signupsLoaded=true; S.loading=false; S.error=null; detectPromotions(); render();
   }, e=>fail(e));
   onSnapshot(votesCol, q=>{ S.votes=q.docs.map(d=>({id:d.id, ...d.data()})); render(); }, e=>console.warn("votes",e));
-  onSnapshot(paidRef, s=>{ S.paid=new Set(s.exists()?(s.data().paid||[]):[]); render(); }, e=>console.warn("paid",e));
+  onSnapshot(paidRef, s=>{ const d=s.exists()?s.data():{}; S.pay=d; S.paid=new Set(d.paid||[]); render(); }, e=>console.warn("paid",e));
+  onSnapshot(collection(db,"payMarks"), q=>{ const m={}; q.docs.forEach(d=>{ m[d.id]=d.data(); }); S.payMarks=m; render(); }, e=>console.warn("payMarks",e));
   onSnapshot(mvpCol, q=>{ S.mvpVotes=q.docs.map(d=>({id:d.id, ...d.data()})); render(); }, e=>console.warn("mvp",e));
   onSnapshot(histCol, q=>{ S.history=q.docs.map(d=>({id:d.id, ...d.data()})).sort((a,b)=>(a.at||0)-(b.at||0)); render(); }, e=>console.warn("history",e));
 }
@@ -653,9 +665,44 @@ function addApart(a,b){
   S.apart=S.apart.concat([{a,b}]); S.draft.apA=""; S.draft.apB=""; render(); saveRoster(true);
 }
 function removeApart(i){ S.apart=S.apart.filter((_,j)=>j!==i); render(); saveRoster(true); }
-function togglePaid(id){
-  const p=new Set(S.paid); p.has(id)?p.delete(id):p.add(id); S.paid=p; render();
-  run(()=>setDoc(paidRef,{paid:[...p]}));
+// ---------- payments ----------
+const PAY_ICON={bit:"💳",cash:"💵",admin:"✅",payer:"🏟️"};
+const PAY_TXT={bit:"שילם בביט",cash:"הביא מזומן",admin:"סומן ששילם",payer:"שילם על המגרש"};
+function payMark(id){ return S.payMarks[id] || (S.paid.has(id)?{m:"admin"}:null); }
+const payActive = () => !!(S.pay && S.pay.payer);
+const payPrice = () => Number((S.pay&&S.pay.price) || S.cfg.price || 0);
+const iAmPayer = () => !!(S.pay && S.pay.payer && S.pay.payer.uid===S.uid);
+function activeList(){ return S.signups.slice(0,S.cfg.capacity); }
+async function setMark(id, m){
+  const ref=doc(db,"payMarks",id);
+  if(!m){ const prev=S.payMarks[id]; const next={...S.payMarks}; delete next[id]; S.payMarks=next;
+    if(S.paid.has(id)){ const p=new Set(S.paid); p.delete(id); S.paid=p; run(()=>updateDoc(paidRef,{paid:[...p]})); }
+    render(); return run(()=>deleteDoc(ref), prev?"הסימון בוטל":null); }
+  S.payMarks={...S.payMarks,[id]:{m,by:S.uid,at:Date.now()}}; render();
+  return run(()=>setDoc(ref,{m, by:S.uid||"", at:Date.now()}));
+}
+function togglePaid(id){ payMark(id) ? setMark(id,null) : setMark(id,"admin"); }
+async function startPayment(){
+  const me=mySignup();
+  if(!S.isAdmin && !(me && activeList().includes(me))){ toast("רק מי שברשימה יכול לעדכן תשלום"); return; }
+  const link=String(S.draft.payLink2 ?? S.cfg.payLink ?? "").trim().slice(0,200);
+  const price=Math.max(0, Math.round(Number(S.draft.payPrice ?? payPrice())||0));
+  if(!price){ toast("כתוב כמה כל אחד צריך להעביר"); return; }
+  const payer = me && activeList().includes(me) ? {uid:S.uid, name:me.name, id:me.id} : {uid:S.uid, name:"המארגן", id:""};
+  const data={...(S.pay||{}), payer, link, price, at:Date.now()};
+  delete S.draft.payLink2; delete S.draft.payPrice; S.payForm=false;
+  S.pay=data; render();
+  await run(()=>setDoc(paidRef,data), "💳 נשלחה בקשת תשלום לכל מי שברשימה");
+  if(payer.id && !payMark(payer.id)) setMark(payer.id,"payer");
+}
+async function cancelPayment(){
+  const batch=writeBatch(db);
+  Object.keys(S.payMarks).forEach(id=>batch.delete(doc(db,"payMarks",id)));
+  batch.set(paidRef,{paid:[]});
+  await run(()=>batch.commit(),"בקשת התשלום בוטלה");
+}
+async function remindUnpaid(){
+  await run(()=>updateDoc(paidRef,{remindAt:Date.now()}),"📣 נשלחה תזכורת למי שלא שילם");
 }
 async function newWeek(){
   const batch=writeBatch(db);
@@ -665,6 +712,11 @@ async function newWeek(){
     const subs=opt?opt.teams.flatMap(t=>t.subs||[]):[];
     const wk={at:Date.now(), date:S.cfg.gameAt&&S.cfg.gameAt<Date.now()+2*86400000?S.cfg.gameAt:Date.now(),
       players:[...new Set(played.map(s=>s.name).concat(subs))], waiting:S.signups.slice(cap).filter(s=>!subs.includes(s.name)).map(s=>s.name)};
+    if(payActive()){
+      wk.pay={payer:S.pay.payer.name, price:payPrice(),
+        paid:played.filter(s=>payMark(s.id)).map(s=>({n:s.name, m:payMark(s.id).m})),
+        unpaid:played.filter(s=>!payMark(s.id)).map(s=>s.name)};
+    }
     batch.set(doc(db,"weeks",String(wk.at)), wk);
   }
   S.signups.forEach(s=>batch.delete(doc(db,"signups",s.id)));
@@ -672,6 +724,7 @@ async function newWeek(){
   S.mvpVotes.forEach(v=>batch.delete(doc(db,"mvpVotes",v.id)));
   batch.set(teamsRef,{options:[],at:0,status:"draft",chosen:null,mvpOpen:false,mvp:null});
   batch.set(paidRef,{paid:[]});
+  Object.keys(S.payMarks).forEach(id=>batch.delete(doc(db,"payMarks",id)));
   let msg="התחלנו שבוע חדש ⚽";
   const c={...S.cfg, prioOpen:false};
   if(c.gameAt){ while(c.gameAt<=Date.now()) c.gameAt+=WEEK; }
@@ -890,11 +943,12 @@ function mvpText(){ return `⭐ ה-MVP של הערב: ${S.teams.mvp}! 👏`; }
 function mvpCallText(){ return `⭐ מי היה ה-MVP של הערב? מצביעים כאן:\n${pageUrl()}#teams`; }
 function promoText(name){ return `${name}, התפנה מקום בכדורגל! אתה בפנים ⚽`+(gameLine()?`\n${gameLine()}`:"")+`\n${pageUrl()}`; }
 function payRemindText(){
-  const cap=S.cfg.capacity, unpaid=S.signups.slice(0,cap).filter(s=>!S.paid.has(s.id));
-  let t=`💳 תזכורת תשלום לכדורגל (${S.cfg.price}₪)\n`;
+  const unpaid=activeList().filter(s=>!payMark(s.id));
+  const link=(S.pay&&S.pay.link)||S.cfg.payLink;
+  let t=`💳 תזכורת תשלום לכדורגל (${payPrice()}₪`+(S.pay&&S.pay.payer?` ל${S.pay.payer.name}`:"")+`)\n`;
   t+=unpaid.map(s=>`• ${s.name}`).join("\n");
-  if(S.cfg.payLink) t+=`\n\nלתשלום: ${S.cfg.payLink}`;
-  return t+"\nתודה! 🙏";
+  if(link) t+=`\n\nלתשלום: ${link}`;
+  return t+`\nאפשר לסמן ששילמתם באפליקציה: ${pageUrl()}\nתודה! 🙏`;
 }
 function optionLines(opt){
   const gk=gkSet(opt);
@@ -1284,23 +1338,70 @@ function navRow(){
     h("a",{href:`https://www.google.com/maps/search/?api=1&query=${q}`,target:"_blank",rel:"noopener"},"🗺️ מפות"));
 }
 
+function payLinkBtn(link, label){
+  if(!link) return null;
+  if(/^https?:\/\//i.test(link)) return h("a",{class:"btn full pay",href:link,target:"_blank",rel:"noopener"},label||"💳 לתשלום בביט / פייבוקס");
+  const ph=normPhone(link);
+  return h("div",{class:"paylinktxt"},"לתשלום: ",h("b",{dir:"ltr"},ph?prettyPhone(ph):link),
+    h("button",{class:"linkbtn",onclick:()=>copy(ph?prettyPhone(ph):link)},"📋 העתק"));
+}
+function payStatusList(canEdit){
+  const act=activeList(), payer=S.pay&&S.pay.payer;
+  return h("div",{class:"paylist"}, act.map(s=>{
+    const mk=payMark(s.id), isPayer=payer&&payer.id===s.id;
+    return h("div",{class:"payrow"+(mk?" ok":"")},
+      h("span",{class:"pn"},s.name),
+      h("span",{class:"ps"}, mk ? `${PAY_ICON[mk.m]||"✅"} ${PAY_TXT[mk.m]||"שילם"}` : "⏳ עוד לא"),
+      canEdit && !isPayer ? h("button",{class:"ic"+(mk?" x":""),title:mk?"בטל סימון":"סמן ששילם",onclick:()=>setMark(s.id, mk?null:"admin")}, mk?"↩":"✔") : h("span",{style:"width:32px"}));
+  }));
+}
 function payCard(){
-  const price=S.cfg.price; if(!price) return null;
-  const cap=S.cfg.capacity, active=S.signups.slice(0,cap), me=mySignup(), link=S.cfg.payLink||"";
-  const isUrl=/^https?:\/\//i.test(link);
-  const payBtn = link ? (isUrl ? h("a",{class:"btn full pay",href:link,target:"_blank",rel:"noopener"},"💳 לתשלום") : h("div",{class:"hint"},"לתשלום: ",h("b",null,link))) : null;
-  if(S.isAdmin){
-    const paidN=active.filter(s=>S.paid.has(s.id)).length;
+  const act=activeList(), me=mySignup(), inGame=me && act.includes(me), g=myGuest(), guestIn=g && act.includes(g);
+  const price=payPrice();
+  // no payment request yet
+  if(!payActive()){
+    if(!inGame && !S.isAdmin) return null;
+    if(!S.payForm) return h("div",{class:"card paycard slim"},
+      h("button",{class:"btn ghost full",onclick:()=>{S.payForm=true;render();}},"🏟️ שילמתי על המגרש, לבקש כסף מכולם"));
     return h("div",{class:"card paycard"},
-      h("h2",null,"💳 תשלומים",h("span",{class:"count"},`${paidN}/${active.length} שילמו`)),
-      h("div",{class:"hint"},`נאסף ${paidN*price}₪ מתוך ${active.length*price}₪. לוחצים על 💰 ליד שחקן כדי לסמן שהוא שילם.`),
-      paidN<active.length ? h("button",{class:"linkbtn",onclick:()=>{S.showPayRemind=!S.showPayRemind;render();}},S.showPayRemind?"סגור":"📣 שלח תזכורת למי שלא שילם") : null,
-      S.showPayRemind && paidN<active.length ? shareRow(payRemindText()) : null);
+      h("h2",null,"🏟️ שילמתי על המגרש"),
+      h("div",{class:"hint"},"כל מי שברשימה יקבל התראה עם הקישור שלך. מי שבהמתנה לא יקבל."),
+      h("label",{class:"field"},h("span",null,"כמה כל שחקן מעביר? (₪)"),
+        h("input",{id:"f_payPrice",type:"number",inputmode:"numeric",value:S.draft.payPrice ?? (price||""),placeholder:"25",oninput:e=>{S.draft.payPrice=e.target.value;}})),
+      h("label",{class:"field"},h("span",null,"קישור לביט / פייבוקס, או מספר טלפון"),
+        h("input",{id:"f_payLink2",type:"text",dir:"ltr",value:S.draft.payLink2 ?? "",placeholder:"https://... או 050-0000000",oninput:e=>{S.draft.payLink2=e.target.value;}})),
+      h("div",{class:"hint",style:"margin-top:4px"},"בביט: ״בקשת תשלום״ ← ״שיתוף קישור״, ומדביקים כאן."),
+      h("div",{class:"share"},
+        h("button",{class:"btn ghost",onclick:()=>{S.payForm=false;render();}},"ביטול"),
+        h("button",{class:"btn",onclick:startPayment},"📣 שלח לכולם")));
   }
-  const inGame = me && S.signups.indexOf(me)<cap;
+  const payer=S.pay.payer, n=act.filter(s=>payMark(s.id)).length;
+  // the payer (or organizer) manages
+  if(iAmPayer() || S.isAdmin){
+    return h("div",{class:"card paycard"},
+      h("h2",null, iAmPayer()?"🏟️ אתה שילמת על המגרש":`🏟️ ${payer.name} שילם על המגרש`, h("span",{class:"count"},`${n}/${act.length} שילמו`)),
+      h("div",{class:"hint"},`${price}₪ לשחקן · נאסף ${n*price}₪ מתוך ${act.length*price}₪`),
+      payStatusList(true),
+      n<act.length ? h("div",{class:"share",style:"margin-top:10px"},
+        h("button",{class:"btn",onclick:remindUnpaid},"📣 תזכורת בהתראה"),
+        h("a",{class:"btn wa",href:waHref(payRemindText()),target:"_blank",rel:"noopener"},"תזכורת בוואטסאפ")) : h("div",{class:"paid-ok",style:"margin-top:10px"},"🎉 כולם שילמו!"),
+      h("button",{class:"linkbtn muted",onclick:()=>{ if(!S.confirmPayCancel){ S.confirmPayCancel=true; render(); setTimeout(()=>{S.confirmPayCancel=false;render();},4000); return; } S.confirmPayCancel=false; cancelPayment(); }}, S.confirmPayCancel?"בטוח? לחץ שוב":"בטל בקשת תשלום"));
+  }
+  if(!inGame && !guestIn) return h("div",{class:"card paycard slim"},h("div",{class:"hint"},`💳 ${payer.name} שילם על המגרש השבוע (${price}₪ לשחקן).`));
+  const mine=[me,g].filter(x=>x && act.includes(x));
   return h("div",{class:"card paycard"},
-    h("h2",null,`💳 עלות: ${price}₪ למשחק`),
-    inGame ? (S.paid.has(me.id) ? h("div",{class:"paid-ok"},"✅ שילמת, תודה!") : payBtn) : payBtn);
+    h("h2",null,`💳 תשלום ל${payer.name}`),
+    h("div",{class:"hint"},`${payer.name} שילם על המגרש. כל שחקן מעביר לו ${price}₪.`),
+    mine.map(x=>{ const mk=payMark(x.id), who=x===me?"":` (האורח שלך ${x.name})`;
+      const SELF={bit:"שילמת בביט",cash:"הבאת מזומן",admin:"סומן ששילמת",payer:"שילמת על המגרש"};
+      if(mk) return h("div",{class:"paid-ok",style:"margin-top:8px"},`${PAY_ICON[mk.m]||"✅"} ${x===me?(SELF[mk.m]||"שילמת"):(PAY_TXT[mk.m]||"שילם")}${who}`,
+        mk.m!=="admin" && mk.m!=="payer" ? h("button",{class:"linkbtn",onclick:()=>setMark(x.id,null)},"בטל") : null);
+      return h("div",{class:"paybox"},
+        x===me ? payLinkBtn(S.pay.link) : h("div",{class:"hint"},`גם עבור האורח שלך, ${x.name}:`),
+        h("div",{class:"share"},
+          h("button",{class:"btn ghost",onclick:()=>setMark(x.id,"bit").then(ok=>ok&&toast(`עדכנו את ${payer.name} ששילמת ✔`))},"✔ שילמתי בביט"),
+          h("button",{class:"btn ghost",onclick:()=>setMark(x.id,"cash").then(ok=>ok&&toast(`עדכנו את ${payer.name} שהבאת מזומן 💵`))},"💵 העברתי מזומן")));
+    }));
 }
 
 function promoCards(){
@@ -1390,10 +1491,10 @@ function guestBox(){
 
 function rowFor(s,i,isWait){
   const pos=isWait?i-S.cfg.capacity+1:i+1, mine=s.uid===S.uid&&s.id===S.uid;
-  const showPay=S.cfg.price>0 && !isWait, paid=S.paid.has(s.id);
+  const showPay=(payActive()||S.cfg.price>0) && !isWait, mk=payMark(s.id), paid=!!mk;
   return h("li",{class:"row"+(isWait?" wait":"")+(mine?" mine":"")},
     h("div",{class:"num"},pos),
-    h("div",{class:"nm"},h("b",null,s.name+(mine?" (אתה)":"")+(showPay&&paid&&!S.isAdmin?" 💰":"")),h("small",null,(s.guestOf?`👤 אורח של ${(S.signups.find(x=>x.id===s.guestOf)||{name:"שחקן"}).name} · `:"")+"נרשם "+fmtTime(s.ts))),
+    h("div",{class:"nm"},h("b",null,s.name+(mine?" (אתה)":"")+(showPay&&paid?` ${PAY_ICON[mk.m]||"✅"}`:"")),h("small",null,(s.guestOf?`👤 אורח של ${(S.signups.find(x=>x.id===s.guestOf)||{name:"שחקן"}).name} · `:"")+"נרשם "+fmtTime(s.ts))),
     S.isAdmin ? h("div",{class:"ctl"},
       showPay ? h("button",{class:"ic pay"+(paid?" on":""),title:paid?"שילם":"לא שילם",onclick:()=>togglePaid(s.id)},"💰") : null,
       h("button",{class:"ic",title:"למעלה",disabled:i===0,onclick:()=>adminMove(i,-1)},"▲"),
@@ -1710,11 +1811,46 @@ function attendanceCard(){
         h("td",null,h("div",{class:"dots"},a.recent.map(r=>h("i",{class:r==null?"na":r?"y":"n"})))),
         h("td",null,h("span",{class:"tag "+a.label.c},a.label.t)))))));
 }
+function paymentsHistory(){
+  const out=[];
+  if(payActive()){
+    const act=activeList(), n=act.filter(s=>payMark(s.id)).length;
+    out.push(h("div",{class:"card"},h("h2",null,"💳 השבוע",h("span",{class:"count"},`${n}/${act.length} שילמו`)),
+      h("div",{class:"hint"},`${S.pay.payer.name} שילם על המגרש · ${payPrice()}₪ לשחקן`), payStatusList(true)));
+  } else out.push(h("div",{class:"card"},h("h2",null,"💳 השבוע"),h("div",{class:"hint"},"עוד אף אחד לא ביקש תשלום השבוע. מי ששילם על המגרש לוחץ ״שילמתי על המגרש״ בלשונית רשימה.")));
+  const wks=S.weeks.filter(w=>w.pay);
+  if(!wks.length){ out.push(h("div",{class:"card"},h("h2",null,"📒 היסטוריה"),h("div",{class:"empty"},"ההיסטוריה נשמרת בכל ״פתח רשימה חדשה״."))); return out; }
+  const m=new Map();
+  const get=n=>{ const k=norm(n); if(!m.has(k)) m.set(k,{name:n,paid:0,unpaid:0,payer:0,debt:0,last:[]}); return m.get(k); };
+  wks.forEach(w=>{ const p=w.pay;
+    (p.paid||[]).forEach(x=>{ const a=get(x.n); if(x.m==="payer") a.payer++; else a.paid++; });
+    (p.unpaid||[]).forEach(n=>{ const a=get(n); a.unpaid++; a.debt+=Number(p.price)||0; a.last.push(fmtDate(w.date||w.at)); });
+  });
+  const rows=[...m.values()].sort((a,b)=>b.unpaid-a.unpaid || b.payer-a.payer || a.name.localeCompare(b.name,"he"));
+  out.push(h("div",{class:"card"},
+    h("h2",null,"📒 היסטוריית תשלומים",h("span",{class:"count"},`${wks.length} שבועות`)),
+    h("table",{class:"att-t"},
+      h("thead",null,h("tr",null,h("th",{class:"tn"},"שחקן"),h("th",null,"שילם"),h("th",null,"לא שילם"),h("th",null,"🏟️ מגרש"))),
+      h("tbody",null,rows.map(a=>h("tr",null,
+        h("td",{class:"tn"},h("b",null,a.name),a.unpaid?h("small",null,`חוב ${a.debt}₪ · ${a.last.slice(-3).join(", ")}`):null),
+        h("td",null,a.paid),
+        h("td",null,a.unpaid?h("span",{class:"tag lo"},a.unpaid):"0"),
+        h("td",null,a.payer||""))))),
+    h("div",{class:"hint",style:"margin-top:8px"},"🏟️ = כמה פעמים שילם על המגרש בעצמו. החובות מחושבים לפי מי שלא סימן תשלום עד ״פתח רשימה חדשה״.")));
+  const recent=wks.slice().reverse().slice(0,6);
+  out.push(h("div",{class:"card"},h("h2",null,"🗓️ לפי שבוע"),
+    recent.map(w=>h("div",{class:"hrow"},
+      h("span",{class:"hdate"},fmtDate(w.date||w.at)),
+      h("span",{class:"hres",style:"font-weight:500"},`🏟️ ${w.pay.payer} · ${(w.pay.paid||[]).length}/${(w.pay.paid||[]).length+(w.pay.unpaid||[]).length} שילמו`,
+        (w.pay.unpaid||[]).length?h("small",{style:"display:block;color:#991b1b"},"לא שילמו: "+w.pay.unpaid.join(", ")):null)))));
+  return out;
+}
 function playersSeg(){
   const v=S.playersView||"rate";
   return h("div",{class:"seg"},
     h("button",{class:v==="rate"?"on":"",onclick:()=>{S.playersView="rate";render();}},"⭐ דירוג ופרטים"),
-    h("button",{class:v==="att"?"on":"",onclick:()=>{S.playersView="att";render();}},"📅 נוכחות"));
+    h("button",{class:v==="att"?"on":"",onclick:()=>{S.playersView="att";render();}},"📅 נוכחות"),
+    h("button",{class:v==="pay"?"on":"",onclick:()=>{S.playersView="pay";render();}},"💳 תשלומים"));
 }
 function viewPlayers(){
   const all=new Map();
@@ -1726,6 +1862,7 @@ function viewPlayers(){
   const sel=(key)=>h("select",{class:"sel",onchange:e=>{S.draft[key]=e.target.value;}},
     h("option",{value:""},"בחר שחקן"), names.map(n=>{ const o=h("option",{value:n},n); if(S.draft[key]===n) o.selected=true; return o; }));
   if(S.playersView==="att") return [playersSeg(), attendanceCard()];
+  if(S.playersView==="pay") return [playersSeg(), ...paymentsHistory()];
   const sugs=ratingSuggestions();
   const lateCount=new Map(); S.lates.forEach(x=>{ const k=norm(x.n); const o=lateCount.get(k)||{n:x.n,c:0,last:0}; o.c++; o.last=Math.max(o.last,x.at||0); lateCount.set(k,o); });
   return [
