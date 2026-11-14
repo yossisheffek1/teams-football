@@ -298,6 +298,7 @@
   .paybox .share{margin-top:8px}
   .paylinktxt{background:#f5f0ff;border-radius:12px;padding:10px 12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   .paid-ok .linkbtn{display:inline;margin-inline-start:8px;padding:0}
+  .slimcard{padding:10px 14px}
 </style>
 </head>
 <body>
@@ -342,7 +343,7 @@ const S = {
   tab: location.hash==="#teams" ? "teams" : location.hash==="#stats" ? "stats" : "list",
   showPaste:false, confirmReset:false, confirmCancel:false, copyText:null, busy:false,
   subSel:new Set(), showColors:false, showImg:null, showText:null,
-  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false, showGuest:false, confirmGuest:false, editHist:null, histDraft:null, editPhone:null, colorPick:null, swapSel:null, myToken:null, adminPushOk:false, lastWin:null, winBusy:false, playersView:"rate", prioBanner:null, payForm:false, confirmPayCancel:false, busyTeams:false, pushTest:{uids:[],names:[]}, testing:false, confirmDel:null, confirmResetHist:false
+  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false, showGuest:false, confirmGuest:false, editHist:null, histDraft:null, editPhone:null, colorPick:null, swapSel:null, myToken:null, adminPushOk:false, lastWin:null, winBusy:false, playersView:"rate", prioBanner:null, payForm:false, confirmPayCancel:false, busyTeams:false, pushTest:{uids:[],names:[]}, testing:false, showContacts:false, phoneNames:{}, confirmDel:null, confirmResetHist:false
 };
 try{ S.promoted = JSON.parse(localStorage.getItem("promoted")||"[]"); }catch(e){}
 let dismissedSug=new Set(); try{ dismissedSug=new Set(JSON.parse(localStorage.getItem("dismissedSug")||"[]")); }catch(e){}
@@ -487,7 +488,7 @@ async function checkAdmin(user){
     ownerUnsub = onSnapshot(ownerRef, s=>{ const d=s.exists()?s.data():{}; S.admins={owner:d.owner||"", emails:d.emails||[]}; render(); }, ()=>{});
     registerAdminDevice();
     onSnapshot(testRef, s=>{ S.pushTest = s.exists()?s.data():{uids:[],names:[]}; render(); }, ()=>{});
-    onSnapshot(collection(db,"phones"), q=>{ const m={}; q.docs.forEach(d=>{ m[d.id]=d.data().phone; }); S.phones=m; render(); }, ()=>{});
+    onSnapshot(collection(db,"phones"), q=>{ const m={}, n={}; q.docs.forEach(d=>{ m[d.id]=d.data().phone; if(d.data().name) n[d.id]=d.data().name; }); S.phones=m; S.phoneNames=n; render(); }, ()=>{});
     onSnapshot(collection(db,"weeks"), q=>{ S.weeks=q.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(a.date||a.at)-(b.date||b.at)); render(); }, ()=>{});
     onSnapshot(latesRef, s=>{ S.lates = s.exists() ? (s.data().list||[]) : []; render(); }, ()=>{});
     try{ const c=await getDoc(cfgRef); if(!c.exists()) await setDoc(cfgRef, DEF_CFG); }catch(e){}
@@ -497,7 +498,7 @@ async function checkAdmin(user){
 onAuthStateChanged(auth, async user=>{
   if(!user){ try{ await signInAnonymously(auth); }catch(e){ fail(e); } return; }
   const first=!S.uid; S.uid = user.uid;
-  if(first) initPush();
+  if(first){ initPush(); if(user.isAnonymous) backfillPhoneName(); }
   await checkAdmin(user);
 });
 subscribe();
@@ -565,7 +566,13 @@ async function selfRegister(name){
 }
 function savePhone(ph){
   if(!S.uid) return;
-  setDoc(doc(db,"phones",S.uid),{phone:ph}).then(()=>lsSet("phoneSaved",ph)).catch(e=>console.warn("phone",e));
+  const name=clean(lsGet("myName"));
+  setDoc(doc(db,"phones",S.uid), name?{phone:ph, name}:{phone:ph}).then(()=>{ lsSet("phoneSaved",ph); if(name) lsSet("phoneNamed",name); }).catch(e=>console.warn("phone",e));
+}
+// phones saved before names were stored: add the name once, silently
+function backfillPhoneName(){
+  const ph=lsGet("myPhone"), name=clean(lsGet("myName"));
+  if(ph && name && lsGet("phoneNamed")!==name) savePhone(ph);
 }
 function myGuest(){ return S.signups.find(s=>s.id===S.uid+"_g" && s.uid===S.uid); }
 async function selfCancel(){
@@ -1985,6 +1992,33 @@ async function sendTestPush(){
   catch(e){ console.error(e); toast("השליחה נכשלה. האם העלית את השרת המעודכן?"); }
   S.testing=false; render();
 }
+function contactsList(){
+  const m=new Map();
+  const add=(name,phone,src)=>{ const ph=normPhone(phone); if(!ph) return; const k=ph;
+    const cur=m.get(k); if(!cur || (!cur.name && name)) m.set(k,{name:name||"", phone:ph, src}); };
+  Object.entries(S.phones||{}).forEach(([uid,ph])=>{
+    const su=S.signups.find(s=>s.uid===uid && !s.guestOf);
+    add((S.phoneNames||{})[uid] || (su&&su.name) || "", ph, "self");
+  });
+  S.ratings.forEach(r=>{ if(r.phone) add(r.n, r.phone, "roster"); });
+  return [...m.values()].sort((a,b)=>(a.name?0:1)-(b.name?0:1) || a.name.localeCompare(b.name,"he"));
+}
+function contactsCard(){
+  const list=contactsList();
+  if(!S.showContacts) return h("div",{class:"card slimcard"},
+    h("button",{class:"btn ghost full",onclick:()=>{S.showContacts=true;render();}},`📱 אנשי קשר (${list.length})`));
+  const allText=list.map(c=>`${c.name||"ללא שם"}: ${prettyPhone(c.phone)}`).join("\n");
+  return h("div",{class:"card"},
+    h("h2",null,"📱 אנשי קשר",h("span",{class:"count"},list.length)),
+    h("div",{class:"hint"},"כל מי שמסר טלפון בהרשמה"+(S.isOwner?", וגם טלפונים שהוספת בלשונית שחקנים":"")+". רק מארגנים רואים את זה."),
+    list.length ? h("div",{class:"paylist"},list.map(c=>h("div",{class:"payrow"},
+      h("span",{class:"pn"},c.name||h("span",{style:"color:var(--muted);font-weight:400"},"ללא שם")),
+      h("a",{class:"ps",dir:"ltr",href:`tel:+${c.phone}`,style:"text-decoration:none"},prettyPhone(c.phone)),
+      h("a",{class:"ic",title:"וואטסאפ",href:`https://wa.me/${c.phone}`,target:"_blank",rel:"noopener",style:"text-decoration:none"},"💬")))) : h("div",{class:"empty"},"עוד אף אחד לא מסר טלפון."),
+    h("div",{class:"winlinks"},
+      list.length ? h("button",{class:"linkbtn",onclick:()=>copy(allText)},"📋 העתק את כל הרשימה") : null,
+      h("button",{class:"linkbtn muted",onclick:()=>{S.showContacts=false;render();}},"סגור")));
+}
 function adminsCard(){
   const a=S.admins, list=a.emails||[];
   const save=emails=>{ S.admins={...a, emails}; render(); run(()=>setDoc(ownerRef,{owner:a.owner||(auth.currentUser&&auth.currentUser.email)||"", emails},{merge:true}),"רשימת המנהלים עודכנה ✔"); };
@@ -2048,6 +2082,7 @@ function viewSettings(){
         h("input",{id:"f_openAt",type:"datetime-local",value:d.openAt ?? (future?toLocalInput(c.openAt):""),oninput:e=>{d.openAt=e.target.value;}}),
         h("button",{class:"btn",onclick:setAutoOpen},"קבע")),
       future ? h("button",{class:"linkbtn",onclick:()=>setCfg({openAt:null},"הפתיחה האוטומטית בוטלה")},"בטל פתיחה אוטומטית") : null),
+    contactsCard(),
     prioCard(),
     S.isOwner ? adminsCard() : null,
     h("div",{class:"card"},
