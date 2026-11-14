@@ -42,9 +42,15 @@ async function allTokens() {
 // When the organizer turned player notifications off, send one copy of each notification to his devices only.
 async function applyMode(msgs) {
   const cfg = await getConfig();
-  if (cfg.pushMode !== "admin") return msgs;
+  if (cfg.pushMode !== "admin" && cfg.pushMode !== "select") return msgs;
   const p = await db.doc("admin/push").get();
   const toks = (p.exists && p.data().tokens) || [];
+  let chosen = [];
+  if (cfg.pushMode === "select") {
+    const t = await db.doc("admin/pushTest").get();
+    const uids = new Set((t.exists && t.data().uids) || []);
+    chosen = msgs.filter((m) => uids.has(m.uid));   // chosen testers get their normal notification
+  }
   const byTitle = new Map();
   for (const m of msgs) { const e = byTitle.get(m.title); if (e) e.n++; else byTitle.set(m.title, { m, n: 1 }); }
   const out = [];
@@ -52,7 +58,7 @@ async function applyMode(msgs) {
     const note = n > 1 ? `(רק אצלך · היה נשלח ל-${n}, למשל: ${m.body})` : `(רק אצלך) ${m.body}`;
     out.push({ ...m, token: t, uid: "admin", ref: { delete: async () => {} }, title: "🔕 " + m.title, body: note });
   }
-  return out;
+  return chosen.concat(out);
 }
 
 // msgs: [{token, ref, title, body, link}]
@@ -336,4 +342,29 @@ exports.makeTeams = onCall(async (req) => {
   const doc = { at: Date.now(), options: b ? [a, b] : [a], status: "draft", chosen: null, mvpOpen: false, mvp: null };
   await db.doc("teams/current").set(doc);
   return { options: doc.options.length, bad: violations(a, apart) + (b ? violations(b, apart) : 0) };
+});
+
+
+// ---------- 6. test notification (organizers only) ----------
+async function isOrganizer(req) {
+  const email = req.auth && req.auth.token && req.auth.token.email_verified && String(req.auth.token.email).toLowerCase();
+  const own = await db.doc("owner/admins").get();
+  const o = own.exists ? own.data() : {};
+  const allowed = [String(o.owner || "").toLowerCase()].concat((o.emails || []).map((e) => String(e).toLowerCase()));
+  return !!email && allowed.includes(email);
+}
+exports.testPush = onCall(async (req) => {
+  if (!(await isOrganizer(req))) throw new HttpsError("permission-denied", "not an organizer");
+  const uids = Array.isArray(req.data && req.data.uids) ? req.data.uids.slice(0, 50) : [];
+  const p = await db.doc("admin/push").get();
+  const mine = ((p.exists && p.data().tokens) || []).map((t) => ({ uid: "admin", token: t, ref: { delete: async () => {} } }));
+  const others = await tokensFor(uids);
+  const msgs = mine.concat(others).map((t) => ({ ...t, title: "🧪 בדיקת התראות", body: "אם אתה רואה את זה, ההתראות עובדות ✅" }));
+  // bypass the notification mode: this is an explicit test
+  const seen = new Set(), list = msgs.filter((m) => !seen.has(m.token) && seen.add(m.token));
+  if (list.length) {
+    await getMessaging().sendEach(list.map((m) => ({ token: m.token, notification: { title: m.title, body: m.body },
+      webpush: { notification: { icon: APP_URL + "icon-192.png" }, fcmOptions: { link: APP_URL } } })));
+  }
+  return { sent: list.length };
 });

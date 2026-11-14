@@ -342,7 +342,7 @@ const S = {
   tab: location.hash==="#teams" ? "teams" : location.hash==="#stats" ? "stats" : "list",
   showPaste:false, confirmReset:false, confirmCancel:false, copyText:null, busy:false,
   subSel:new Set(), showColors:false, showImg:null, showText:null,
-  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false, showGuest:false, confirmGuest:false, editHist:null, histDraft:null, editPhone:null, colorPick:null, swapSel:null, myToken:null, adminPushOk:false, lastWin:null, winBusy:false, playersView:"rate", prioBanner:null, payForm:false, confirmPayCancel:false, busyTeams:false, confirmDel:null, confirmResetHist:false
+  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false, showGuest:false, confirmGuest:false, editHist:null, histDraft:null, editPhone:null, colorPick:null, swapSel:null, myToken:null, adminPushOk:false, lastWin:null, winBusy:false, playersView:"rate", prioBanner:null, payForm:false, confirmPayCancel:false, busyTeams:false, pushTest:{uids:[],names:[]}, testing:false, confirmDel:null, confirmResetHist:false
 };
 try{ S.promoted = JSON.parse(localStorage.getItem("promoted")||"[]"); }catch(e){}
 let dismissedSug=new Set(); try{ dismissedSug=new Set(JSON.parse(localStorage.getItem("dismissedSug")||"[]")); }catch(e){}
@@ -486,6 +486,7 @@ async function checkAdmin(user){
     } else if(S.playersView==="rate") S.playersView="att";
     ownerUnsub = onSnapshot(ownerRef, s=>{ const d=s.exists()?s.data():{}; S.admins={owner:d.owner||"", emails:d.emails||[]}; render(); }, ()=>{});
     registerAdminDevice();
+    onSnapshot(testRef, s=>{ S.pushTest = s.exists()?s.data():{uids:[],names:[]}; render(); }, ()=>{});
     onSnapshot(collection(db,"phones"), q=>{ const m={}; q.docs.forEach(d=>{ m[d.id]=d.data().phone; }); S.phones=m; render(); }, ()=>{});
     onSnapshot(collection(db,"weeks"), q=>{ S.weeks=q.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(a.date||a.at)-(b.date||b.at)); render(); }, ()=>{});
     onSnapshot(latesRef, s=>{ S.lates = s.exists() ? (s.data().list||[]) : []; render(); }, ()=>{});
@@ -1950,6 +1951,40 @@ function togglePrio(name){
   set.has(k)?set.delete(k):set.add(k);
   setCfg({priority:[...set]});
 }
+// who receives notifications: everyone / only the organizer / chosen testers
+const testRef = doc(db,"admin","pushTest");
+function pushModeCard(){
+  const c=S.cfg, mode=c.pushMode||"all", sel=S.pushTest||{uids:[],names:[]};
+  const set=new Set(sel.uids||[]);
+  const desc={all:"כל מי שהפעיל התראות מקבל אותן", admin:"השחקנים לא מקבלים כלום. אתה מקבל עותק של כל התראה", select:"רק השחקנים שבחרת מקבלים את ההתראות הרגילות שלהם, ואתה מקבל עותק"};
+  const toggle=s=>{ const u=new Set(set), names=new Map((sel.uids||[]).map((id,i)=>[id,(sel.names||[])[i]]));
+    if(u.has(s.uid)){ u.delete(s.uid); names.delete(s.uid); } else { u.add(s.uid); names.set(s.uid,s.name); }
+    const ids=[...u]; S.pushTest={uids:ids, names:ids.map(id=>names.get(id)||"")}; render();
+    run(()=>setDoc(testRef,S.pushTest)); };
+  const cands=S.signups.filter(s=>s.uid && s.uid!=="admin" && !s.guestOf);
+  const extra=(sel.uids||[]).map((id,i)=>({uid:id,name:(sel.names||[])[i]||"?"})).filter(x=>!cands.some(s=>s.uid===x.uid));
+  return h("div",null,
+    h("div",{class:"seg3"},
+      [["all","🔔 כולם"],["admin","🙋 רק אני"],["select","🎯 נבחרים"]].map(([k,l])=>h("button",{class:"btn "+(mode===k?"on":"ghost"),onclick:()=>setCfg({pushMode:k},k==="all"?"🔔 התראות לכולם":k==="admin"?"🔕 רק אתה תקבל התראות":"🎯 רק הנבחרים יקבלו התראות")},l))),
+    h("div",{class:"hint",style:"margin-top:6px"},desc[mode]),
+    mode==="select" ? h("div",null,
+      h("div",{class:"sub-h"},"מי מקבל? (מתוך מי שנרשם דרך האפליקציה)"),
+      cands.length||extra.length ? h("div",{class:"chips"},cands.concat(extra).map(s=>h("button",{class:"chip"+(set.has(s.uid)?" on":""),onclick:()=>toggle(s)},(set.has(s.uid)?"✔ ":"")+s.name))) : h("div",{class:"hint"},"אין עדיין שחקנים שנרשמו בעצמם השבוע."),
+      h("div",{class:"hint"},"רק מי שהפעיל התראות בטלפון שלו יקבל.")) : null,
+    h("button",{class:"btn ghost full",style:"margin-top:10px",disabled:S.testing,onclick:sendTestPush},
+      S.testing?"שולח…": mode==="select"&&set.size ? `🧪 שלח התראת בדיקה ל-${set.size} נבחרים ולך` : "🧪 שלח לי התראת בדיקה"),
+    S.adminPushOk ? null : h("div",null,
+      h("div",{class:"hint",style:"margin-top:6px"},"כדי לקבל התראות אצלך, הפעל התראות במכשיר הזה:"),
+      pushBox()));
+}
+async function sendTestPush(){
+  const mode=S.cfg.pushMode||"all", uids=mode==="select"?((S.pushTest||{}).uids||[]):[];
+  S.testing=true; render();
+  try{ const r=await httpsCallable(fns,"testPush")({uids}); const n=(r.data||{}).sent||0;
+    toast(n?`🧪 נשלחו ${n} התראות בדיקה`:"לא נמצא אף מכשיר עם התראות פעילות"); }
+  catch(e){ console.error(e); toast("השליחה נכשלה. האם העלית את השרת המעודכן?"); }
+  S.testing=false; render();
+}
 function adminsCard(){
   const a=S.admins, list=a.emails||[];
   const save=emails=>{ S.admins={...a, emails}; render(); run(()=>setDoc(ownerRef,{owner:a.owner||(auth.currentUser&&auth.currentUser.email)||"", emails},{merge:true}),"רשימת המנהלים עודכנה ✔"); };
@@ -2027,15 +2062,7 @@ function viewSettings(){
       h("button",{class:"btn full",style:"margin-top:10px",onclick:saveDetails},"💾 שמור פרטים")),
     h("div",{class:"card"},
       h("h2",null,"🔔 התראות לשחקנים"),
-      h("div",{class:"stepper"},
-        h("div",{class:"lbl"},
-          h("b",null,c.pushMode==="admin"?"כבוי, רק אצלך":"פעיל לכולם"),
-          h("small",null,c.pushMode==="admin"?"השחקנים לא מקבלים התראות. אתה מקבל עותק של כל התראה, למשל לבדיקות":"כל מי שהפעיל התראות מקבל אותן")),
-        h("button",{class:"switch"+(c.pushMode==="admin"?"":" on"),role:"switch","aria-checked":c.pushMode==="admin"?"false":"true",
-          onclick:()=>setCfg({pushMode:c.pushMode==="admin"?"all":"admin"}, c.pushMode==="admin"?"🔔 ההתראות לשחקנים הופעלו":"🔕 ההתראות לשחקנים כובו, רק אתה תקבל")},h("i"))),
-      S.adminPushOk ? null : h("div",null,
-        h("div",{class:"hint",style:"margin-top:6px"},"כדי לקבל את ההתראות אצלך, הפעל התראות במכשיר הזה:"),
-        pushBox())),
+      pushModeCard()),
     h("div",{class:"card"},
       h("h2",null,"🔒 ביטולים ואורחים"),
       h("div",{class:"hint"}, c.gameAt ? "כמה שעות לפני המשחק שחקנים כבר לא יכולים לבטל לבד?" : "כדי לחסום ביטולים, קבע קודם מועד משחק בכרטיס ״פרטי המשחק״."),
