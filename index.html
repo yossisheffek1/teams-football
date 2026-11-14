@@ -1513,7 +1513,7 @@ function viewList(){
     out.push(h("button",{class:"card votecall mvpcall",onclick:()=>{S.tab="teams";render();}},
       h("b",null,"⭐ מי ה-MVP של הערב?"), h("span",null, myMvpVote() ? `הצבעת ל${myMvpVote()} · לחץ לשינוי` : "לחץ כאן כדי להצביע")));
   out.push(myCard());
-  out.push(payCard());
+  if(payActive()) out.push(payCard());   // an open payment request stays on top
   out.push(installCard());
   if(S.isAdmin){
     const inp=h("input",{id:"addName",type:"text",placeholder:"הוספת שחקן ידנית",autocomplete:"off",
@@ -1539,6 +1539,7 @@ function viewList(){
     h("h2",null,"⏳ רשימת המתנה",h("span",{class:"count"},w.length)),
     h("div",{class:"hint",style:"margin-bottom:6px"},"כשמישהו מבטל, הראשון בהמתנה עולה אוטומטית."),
     h("ol",{class:"list"},w.map((s,j)=>rowFor(s,cap+j,true)))));
+  if(!payActive()) out.push(payCard());   // "I paid for the pitch" button sits below the list
   if(S.signups.length) out.push(h("div",{class:"card"},h("h2",null,"📤 שיתוף הרשימה"),shareRow(listText())));
   out.push(navRow());
   return out;
