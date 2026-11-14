@@ -234,6 +234,10 @@
   .swaphint{font-size:13px;color:var(--muted);margin-top:10px}
   .swaphint.on{background:#e7f3ea;color:var(--accent);font-weight:600;border-radius:10px;padding:8px 10px;display:flex;align-items:center;justify-content:space-between;gap:8px;position:sticky;top:58px;z-index:4}
   .swaphint .linkbtn{padding:0}
+  .switch{width:52px;height:30px;border-radius:30px;background:#d1d5db;position:relative;flex:none;transition:background .2s}
+  .switch i{position:absolute;top:3px;inset-inline-start:3px;width:24px;height:24px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:inset-inline-start .2s}
+  .switch.on{background:var(--accent)}
+  .switch.on i{inset-inline-start:25px}
 </style>
 </head>
 <body>
@@ -269,7 +273,7 @@ const COLORS = [
   {n:"לבנים", c:"#ffffff", e:"⚪"}, {n:"סגולים", c:"#7c3aed", e:"🟣"}, {n:"ורודים", c:"#ec4899", e:"🩷"},
   {n:"חומים", c:"#92400e", e:"🟤"}
 ];
-const DEF_CFG = {capacity:18, numTeams:3, open:true, colors:[0,1,2,3,4,5,6,7], openAt:null, game:{day:"",time:"",place:""}, price:0, payLink:"", gameAt:null, lockHours:0, allowGuests:true};
+const DEF_CFG = {capacity:18, numTeams:3, open:true, colors:[0,1,2,3,4,5,6,7], openAt:null, game:{day:"",time:"",place:""}, price:0, payLink:"", gameAt:null, lockHours:0, allowGuests:true, pushMode:"all"};
 const OPT_NAMES = ["אופציה א׳","אופציה ב׳"];
 const S = {
   cfg:{...DEF_CFG}, cfgLoaded:false, signups:[], signupsLoaded:false, ratings:[], apart:[], teams:null, votes:[], paid:new Set(), history:[], mvpVotes:[], lates:[], phones:{}, pushState:"unknown",
@@ -277,7 +281,7 @@ const S = {
   tab: location.hash==="#teams" ? "teams" : location.hash==="#stats" ? "stats" : "list",
   showPaste:false, confirmReset:false, confirmCancel:false, copyText:null, busy:false,
   subSel:new Set(), showColors:false, showImg:null, showText:null,
-  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false, showGuest:false, confirmGuest:false, editHist:null, histDraft:null, editPhone:null, colorPick:null, swapSel:null, confirmDel:null, confirmResetHist:false
+  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false, showGuest:false, confirmGuest:false, editHist:null, histDraft:null, editPhone:null, colorPick:null, swapSel:null, myToken:null, adminPushOk:false, confirmDel:null, confirmResetHist:false
 };
 try{ S.promoted = JSON.parse(localStorage.getItem("promoted")||"[]"); }catch(e){}
 let dismissedSug=new Set(); try{ dismissedSug=new Set(JSON.parse(localStorage.getItem("dismissedSug")||"[]")); }catch(e){}
@@ -405,6 +409,7 @@ async function checkAdmin(user){
   catch(e){ S.isAdmin=false; toast("החשבון הזה לא מוגדר כמארגן"); }
   if(S.isAdmin){
     ratUnsub = onSnapshot(ratRef, s=>{ const d=s.exists()?s.data():{}; S.ratings=d.list||[]; S.apart=d.apart||[]; render(); }, ()=>{});
+    registerAdminDevice();
     onSnapshot(collection(db,"phones"), q=>{ const m={}; q.docs.forEach(d=>{ m[d.id]=d.data().phone; }); S.phones=m; render(); }, ()=>{});
     onSnapshot(latesRef, s=>{ S.lates = s.exists() ? (s.data().list||[]) : []; render(); }, ()=>{});
     try{ const c=await getDoc(cfgRef); if(!c.exists()) await setDoc(cfgRef, DEF_CFG); }catch(e){}
@@ -959,9 +964,20 @@ async function refreshToken(interactive){
     const token=await getToken(messaging,{vapidKey:VAPID_KEY, serviceWorkerRegistration:reg});
     if(!token) throw new Error("no token");
     if(S.uid && token!==lsGet("pushToken:"+S.uid)){ await setDoc(doc(db,"tokens",S.uid),{token, at:serverTimestamp()}); lsSet("pushToken:"+S.uid, token); }
-    lsSet("pushOn","1"); S.pushState="on"; render();
-    if(interactive) toast("🔔 התראות הופעלו! נודיע לך כשיתפנה מקום");
+    lsSet("pushOn","1"); S.pushState="on"; S.myToken=token; render();
+    if(S.isAdmin) registerAdminDevice();
+    if(interactive) toast("🔔 התראות הופעלו!");
   }catch(e){ console.warn("token",e); if(interactive) toast("לא הצלחתי להפעיל התראות"); }
+}
+// the organizer's devices: they keep getting notifications when player notifications are off
+async function registerAdminDevice(){
+  if(!S.isAdmin || !S.myToken) return;
+  try{
+    const ref=doc(db,"admin","push"), cur=await getDoc(ref);
+    const list=(cur.exists()&&cur.data().tokens)||[];
+    if(!list.includes(S.myToken)) await setDoc(ref,{tokens:list.concat([S.myToken]).slice(-5)},{merge:true});
+    S.adminPushOk=true; render();
+  }catch(e){ console.warn("admin push",e); }
 }
 async function enablePush(){
   if(!messaging) return;
@@ -1500,6 +1516,17 @@ function viewSettings(){
       field("price","מחיר לשחקן (₪), 0 = בלי מעקב תשלומים",c.price||"",{type:"number",im:"numeric",ph:"0"}),
       field("payLink","קישור לביט / פייבוקס, או מספר טלפון",c.payLink,{ph:"https://...",dir:"ltr"}),
       h("button",{class:"btn full",style:"margin-top:10px",onclick:saveDetails},"💾 שמור פרטים")),
+    h("div",{class:"card"},
+      h("h2",null,"🔔 התראות לשחקנים"),
+      h("div",{class:"stepper"},
+        h("div",{class:"lbl"},
+          h("b",null,c.pushMode==="admin"?"כבוי, רק אצלך":"פעיל לכולם"),
+          h("small",null,c.pushMode==="admin"?"השחקנים לא מקבלים התראות. אתה מקבל עותק של כל התראה, למשל לבדיקות":"כל מי שהפעיל התראות מקבל אותן")),
+        h("button",{class:"switch"+(c.pushMode==="admin"?"":" on"),role:"switch","aria-checked":c.pushMode==="admin"?"false":"true",
+          onclick:()=>setCfg({pushMode:c.pushMode==="admin"?"all":"admin"}, c.pushMode==="admin"?"🔔 ההתראות לשחקנים הופעלו":"🔕 ההתראות לשחקנים כובו, רק אתה תקבל")},h("i"))),
+      S.adminPushOk ? null : h("div",null,
+        h("div",{class:"hint",style:"margin-top:6px"},"כדי לקבל את ההתראות אצלך, הפעל התראות במכשיר הזה:"),
+        pushBox())),
     h("div",{class:"card"},
       h("h2",null,"🔒 ביטולים ואורחים"),
       h("div",{class:"hint"}, c.gameAt ? "כמה שעות לפני המשחק שחקנים כבר לא יכולים לבטל לבד?" : "כדי לחסום ביטולים, קבע קודם מועד משחק בכרטיס ״פרטי המשחק״."),

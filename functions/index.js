@@ -38,8 +38,25 @@ async function allTokens() {
   return snap.docs.filter((d) => d.data().token).map((d) => ({ uid: d.id, token: d.data().token, ref: d.ref }));
 }
 
+// When the organizer turned player notifications off, send one copy of each notification to his devices only.
+async function applyMode(msgs) {
+  const cfg = await getConfig();
+  if (cfg.pushMode !== "admin") return msgs;
+  const p = await db.doc("admin/push").get();
+  const toks = (p.exists && p.data().tokens) || [];
+  const byTitle = new Map();
+  for (const m of msgs) { const e = byTitle.get(m.title); if (e) e.n++; else byTitle.set(m.title, { m, n: 1 }); }
+  const out = [];
+  for (const { m, n } of byTitle.values()) for (const t of toks) {
+    const note = n > 1 ? `(רק אצלך · היה נשלח ל-${n}, למשל: ${m.body})` : `(רק אצלך) ${m.body}`;
+    out.push({ ...m, token: t, uid: "admin", ref: { delete: async () => {} }, title: "🔕 " + m.title, body: note });
+  }
+  return out;
+}
+
 // msgs: [{token, ref, title, body, link}]
 async function sendAll(msgs) {
+  msgs = await applyMode(msgs);
   const seen = new Set();
   msgs = msgs.filter((m) => !seen.has(m.token) && seen.add(m.token));
   for (let i = 0; i < msgs.length; i += 500) {
