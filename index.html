@@ -321,6 +321,7 @@ const firebaseConfig = {
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-functions.js";
 import { getMessaging, getToken, onMessage, isSupported } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging.js";
 import { getFirestore, doc, collection, onSnapshot, setDoc, addDoc, deleteDoc, getDoc, updateDoc, serverTimestamp, query, orderBy, writeBatch, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
@@ -337,11 +338,11 @@ const DEF_CFG = {capacity:18, numTeams:3, open:true, colors:[0,1,2,3,4,5,6,7], o
 const OPT_NAMES = ["אופציה א׳","אופציה ב׳"];
 const S = {
   cfg:{...DEF_CFG}, cfgLoaded:false, signups:[], signupsLoaded:false, ratings:[], apart:[], teams:null, votes:[], paid:new Set(), pay:{}, payMarks:{}, history:[], weeks:[], mvpVotes:[], lates:[], phones:{}, pushState:"unknown",
-  uid:null, isAdmin:false, loading:true, error:null,
+  uid:null, isAdmin:false, isOwner:false, admins:{owner:"",emails:[]}, loading:true, error:null,
   tab: location.hash==="#teams" ? "teams" : location.hash==="#stats" ? "stats" : "list",
   showPaste:false, confirmReset:false, confirmCancel:false, copyText:null, busy:false,
   subSel:new Set(), showColors:false, showImg:null, showText:null,
-  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false, showGuest:false, confirmGuest:false, editHist:null, histDraft:null, editPhone:null, colorPick:null, swapSel:null, myToken:null, adminPushOk:false, lastWin:null, winBusy:false, playersView:"rate", prioBanner:null, payForm:false, confirmPayCancel:false, confirmDel:null, confirmResetHist:false
+  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false, showGuest:false, confirmGuest:false, editHist:null, histDraft:null, editPhone:null, colorPick:null, swapSel:null, myToken:null, adminPushOk:false, lastWin:null, winBusy:false, playersView:"rate", prioBanner:null, payForm:false, confirmPayCancel:false, busyTeams:false, confirmDel:null, confirmResetHist:false
 };
 try{ S.promoted = JSON.parse(localStorage.getItem("promoted")||"[]"); }catch(e){}
 let dismissedSug=new Set(); try{ dismissedSug=new Set(JSON.parse(localStorage.getItem("dismissedSug")||"[]")); }catch(e){}
@@ -438,6 +439,8 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 const cfgRef = doc(db,"config","main"), teamsRef = doc(db,"teams","current"), ratRef = doc(db,"ratings","main"), paidRef = doc(db,"payments","current");
+const ownerRef = doc(db,"owner","admins");
+const fns = getFunctions(app, "europe-west1");
 const signCol = collection(db,"signups"), votesCol = collection(db,"votes"), histCol = collection(db,"history"), mvpCol = collection(db,"mvpVotes"), latesRef = doc(db,"lates","main");
 
 // ---------- data ----------
@@ -466,14 +469,22 @@ function subscribe(){
 }
 function fail(e){ console.error(e); S.loading=false; S.error="לא הצלחתי לטעון את הנתונים. בדוק חיבור לאינטרנט."; render(); }
 
+let ownerUnsub=null;
 async function checkAdmin(user){
   if(ratUnsub){ ratUnsub(); ratUnsub=null; }
-  S.isAdmin=false;
+  if(ownerUnsub){ ownerUnsub(); ownerUnsub=null; }
+  S.isAdmin=false; S.isOwner=false; S.ratings=[]; S.apart=[];
   if(!user || user.isAnonymous){ render(); return; }
   try{ await getDoc(doc(db,"admin","check")); S.isAdmin=true; }
   catch(e){ S.isAdmin=false; toast("החשבון הזה לא מוגדר כמארגן"); }
   if(S.isAdmin){
-    ratUnsub = onSnapshot(ratRef, s=>{ const d=s.exists()?s.data():{}; S.ratings=d.list||[]; S.apart=d.apart||[]; render(); }, ()=>{});
+    // only the owner may read ratings; a successful read tells us this is the owner
+    try{ await getDoc(ratRef); S.isOwner=true; }catch(e){ S.isOwner=false; }
+    if(S.isOwner){
+      ratUnsub = onSnapshot(ratRef, s=>{ const d=s.exists()?s.data():{}; S.ratings=d.list||[]; S.apart=d.apart||[]; render(); }, ()=>{});
+      if(user.email && S.admins.owner!==user.email) setDoc(ownerRef,{owner:user.email},{merge:true}).catch(()=>{});
+    } else if(S.playersView==="rate") S.playersView="att";
+    ownerUnsub = onSnapshot(ownerRef, s=>{ const d=s.exists()?s.data():{}; S.admins={owner:d.owner||"", emails:d.emails||[]}; render(); }, ()=>{});
     registerAdminDevice();
     onSnapshot(collection(db,"phones"), q=>{ const m={}; q.docs.forEach(d=>{ m[d.id]=d.data().phone; }); S.phones=m; render(); }, ()=>{});
     onSnapshot(collection(db,"weeks"), q=>{ S.weeks=q.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(a.date||a.at)-(b.date||b.at)); render(); }, ()=>{});
@@ -803,9 +814,19 @@ const player = s => ({name:s.name, r:ratingOf(s.name), gk:isGK(s.name)});
 function apartViolations(opt){
   let v=0; for(const t of opt.teams){ const ns=new Set(t.players.map(norm)); for(const p of S.apart) if(ns.has(norm(p.a))&&ns.has(norm(p.b))) v++; } return v;
 }
+async function makeTeamsServer(){
+  S.busyTeams=true; render();
+  try{
+    const res=await httpsCallable(fns,"makeTeams")({subs:[...S.subSel]});
+    const d=res.data||{};
+    toast(d.bad ? "⚠️ לא הצלחתי להפריד את כל הזוגות של ״לא ביחד״" : d.options>1 ? "נוצרו 2 אופציות ⚽" : "נוצרה אופציה אחת");
+  }catch(e){ console.error(e); toast("החלוקה נכשלה, נסה שוב"); }
+  S.busyTeams=false; render();
+}
 function makeTeams(){
   const cap=S.cfg.capacity, active=S.signups.slice(0,cap);
   if(active.length<2){ toast("צריך לפחות 2 שחקנים ברשימה"); return; }
+  if(!S.isOwner) return makeTeamsServer();   // co-organizers don't see ratings: the server balances
   const k=Math.min(S.cfg.numTeams,active.length);
   const main=active.map(player);
   const subs=S.signups.slice(cap).filter(s=>S.subSel.has(s.id)).map(player);
@@ -1604,8 +1625,8 @@ function teamCard(tm,i,showPow,opt,optIdx){
 function optionBlock(opt, idx, mode){
   const v=roundVotes(), cnt=v.filter(x=>x.choice===idx).length, total=v.length;
   const voting=S.teams.status==="voting", mine=myVote()===idx;
-  const st=S.isAdmin?optionStrength(opt):null;
-  const bad=S.isAdmin?apartViolations(opt):0;
+  const st=S.isOwner?optionStrength(opt):null;
+  const bad=S.isOwner?apartViolations(opt):0;
   return h("div",{class:"opt"+(mine?" mine":"")},
     S.teams.options.length>1 ? h("div",{class:"opth"},
       h("b",null,OPT_NAMES[idx]),
@@ -1614,7 +1635,7 @@ function optionBlock(opt, idx, mode){
     bad ? h("div",{class:"stale",style:"margin-top:6px"},`⚠️ ${bad} זוגות ״לא ביחד״ באותה קבוצה`) : null,
     voting && total ? h("div",{class:"vbar"},h("i",{style:`width:${cnt/total*100}%`})) : null,
     S.isAdmin ? swapHint(idx) : null,
-    h("div",{class:"teams"},opt.teams.map((tm,i)=>teamCard(tm,i,S.isAdmin,opt,idx))),
+    h("div",{class:"teams"},opt.teams.map((tm,i)=>teamCard(tm,i,S.isOwner,opt,idx))),
     mode==="vote" ? h("button",{class:"btn full big"+(mine?" chosen":""),style:"margin-top:10px",onclick:()=>vote(idx)}, mine?`✔ הצבעת ל${OPT_NAMES[idx]}`:`אני בעד ${OPT_NAMES[idx]}`) : null,
     mode==="admin" ? h("div",null,
       h("div",{class:"hint",style:"margin-top:10px"}, S.teams.options.length>1 ? "שליחת האופציה הזו בנפרד:" : "שליחה:"),
@@ -1638,7 +1659,8 @@ function splitControls(){
     waiting.length ? h("div",{class:"subsel"},
       h("div",{class:"hint"},"🔄 לצרף מרשימת ההמתנה כמחליפים? (לחץ לסימון)"),
       h("div",{class:"chips"},waiting.map(s=>h("button",{class:"chip"+(S.subSel.has(s.id)?" on":""),onclick:()=>{ S.subSel.has(s.id)?S.subSel.delete(s.id):S.subSel.add(s.id); render(); }},(S.subSel.has(s.id)?"✔ ":"")+s.name)))) : null,
-    h("button",{class:"btn full big",style:"margin-top:12px",onclick:makeTeams},S.teams?"🔄 צור אופציות חדשות":"⚽ צור 2 אופציות לכוחות"));
+    !S.isOwner ? h("div",{class:"hint",style:"margin-top:8px"},"🔒 החלוקה נעשית בשרת לפי הדירוגים של המארגן הראשי. הדירוגים עצמם לא מוצגים לך.") : null,
+    h("button",{class:"btn full big",style:"margin-top:12px",disabled:S.busyTeams,onclick:makeTeams},S.busyTeams?"מחלק…":S.teams?"🔄 צור אופציות חדשות":"⚽ צור 2 אופציות לכוחות"));
 }
 function ensureResDraft(){
   const T=S.teams; if(!T||T.status!=="final") return null;
@@ -1706,7 +1728,7 @@ function viewTeams(){
     if(T.mvpOpen || S.isAdmin) out.push(mvpCard(opt));
     out.push(h("div",{class:"banner final"},"✅ אלה הכוחות להשבוע"+(T.options.length>1?` (${OPT_NAMES[idx]})`:"")));
     if(S.isAdmin) out.push(swapHint(idx));
-    out.push(h("div",{class:"teams"},opt.teams.map((tm,i)=>teamCard(tm,i,S.isAdmin,opt,idx))));
+    out.push(h("div",{class:"teams"},opt.teams.map((tm,i)=>teamCard(tm,i,S.isOwner,opt,idx))));
     if(S.isAdmin){
       out.push(h("div",{class:"card"},h("h2",null,"📤 שליחת הכוחות"),imageShare("final", finalText()),
         T.options.length>1 ? h("button",{class:"linkbtn",onclick:()=>setStatus("draft")},"↩ חזור לשתי האופציות") : null));
@@ -1846,14 +1868,24 @@ function paymentsHistory(){
         (w.pay.unpaid||[]).length?h("small",{style:"display:block;color:#991b1b"},"לא שילמו: "+w.pay.unpaid.join(", ")):null)))));
   return out;
 }
+function latesCard(){
+  const lateCount=new Map(); S.lates.forEach(x=>{ const k=norm(x.n); const o=lateCount.get(k)||{n:x.n,c:0,last:0}; o.c++; o.last=Math.max(o.last,x.at||0); lateCount.set(k,o); });
+  return h("div",{class:"card"},
+      h("h2",null,"⏰ ביטולים מאוחרים"),
+      h("div",{class:"hint"},"כשאתה מסיר שחקן בזמן חסימת הביטול, זה נרשם כאן אוטומטית."),
+      lateCount.size ? [...lateCount.values()].sort((a,b)=>b.c-a.c).map(o=>h("div",{class:"prow"},
+        h("div",{class:"nm"},h("b",null,o.n),h("small",{class:"unr"},`${o.c} ביטולים · אחרון ${fmtDate(o.last)}`)),
+        h("button",{class:"ic x",title:"אפס",onclick:()=>removeLate(o.n)},"×"))) : h("div",{class:"empty"},"אין ביטולים מאוחרים 👍"));
+}
 function playersSeg(){
   const v=S.playersView||"rate";
   return h("div",{class:"seg"},
-    h("button",{class:v==="rate"?"on":"",onclick:()=>{S.playersView="rate";render();}},"⭐ דירוג ופרטים"),
+    S.isOwner ? h("button",{class:v==="rate"?"on":"",onclick:()=>{S.playersView="rate";render();}},"⭐ דירוג ופרטים") : null,
     h("button",{class:v==="att"?"on":"",onclick:()=>{S.playersView="att";render();}},"📅 נוכחות"),
     h("button",{class:v==="pay"?"on":"",onclick:()=>{S.playersView="pay";render();}},"💳 תשלומים"));
 }
 function viewPlayers(){
+  if(!S.isOwner && (S.playersView||"rate")==="rate") S.playersView="att";
   const all=new Map();
   S.ratings.forEach(r=>all.set(norm(r.n),r.n));
   S.signups.forEach(s=>{ if(!all.has(norm(s.name))) all.set(norm(s.name),s.name); });
@@ -1862,7 +1894,7 @@ function viewPlayers(){
     onkeydown:e=>{ if(e.key==="Enter"&&e.target.value.trim()){ setRating(clean(e.target.value),DEF_RATING); e.target.value=""; } }});
   const sel=(key)=>h("select",{class:"sel",onchange:e=>{S.draft[key]=e.target.value;}},
     h("option",{value:""},"בחר שחקן"), names.map(n=>{ const o=h("option",{value:n},n); if(S.draft[key]===n) o.selected=true; return o; }));
-  if(S.playersView==="att") return [playersSeg(), attendanceCard()];
+  if(S.playersView==="att") return [playersSeg(), attendanceCard(), latesCard()];
   if(S.playersView==="pay") return [playersSeg(), ...paymentsHistory()];
   const sugs=ratingSuggestions();
   const lateCount=new Map(); S.lates.forEach(x=>{ const k=norm(x.n); const o=lateCount.get(k)||{n:x.n,c:0,last:0}; o.c++; o.last=Math.max(o.last,x.at||0); lateCount.set(k,o); });
@@ -1903,13 +1935,7 @@ function viewPlayers(){
         h("button",{class:"btn",onclick:()=>addApart(S.draft.apA,S.draft.apB)},"הוסף")) : h("div",{class:"hint"},"צריך לפחות שני שחקנים."),
       S.apart.length ? h("div",{style:"margin-top:8px"},S.apart.map((p,i)=>h("div",{class:"prow"},
         h("div",{class:"nm"},h("b",null,`${p.a} ⟷ ${p.b}`)),
-        h("button",{class:"ic x",title:"הסר",onclick:()=>removeApart(i)},"×")))) : null),
-    h("div",{class:"card"},
-      h("h2",null,"⏰ ביטולים מאוחרים"),
-      h("div",{class:"hint"},"כשאתה מסיר שחקן בזמן חסימת הביטול, זה נרשם כאן אוטומטית."),
-      lateCount.size ? [...lateCount.values()].sort((a,b)=>b.c-a.c).map(o=>h("div",{class:"prow"},
-        h("div",{class:"nm"},h("b",null,o.n),h("small",{class:"unr"},`${o.c} ביטולים · אחרון ${fmtDate(o.last)}`)),
-        h("button",{class:"ic x",title:"אפס",onclick:()=>removeLate(o.n)},"×"))) : h("div",{class:"empty"},"אין ביטולים מאוחרים 👍"))
+        h("button",{class:"ic x",title:"הסר",onclick:()=>removeApart(i)},"×")))) : null)
   ];
 }
 
@@ -1923,6 +1949,22 @@ function togglePrio(name){
   const set=new Set(S.cfg.priority||[]), k=norm(name);
   set.has(k)?set.delete(k):set.add(k);
   setCfg({priority:[...set]});
+}
+function adminsCard(){
+  const a=S.admins, list=a.emails||[];
+  const save=emails=>{ S.admins={...a, emails}; render(); run(()=>setDoc(ownerRef,{owner:a.owner||(auth.currentUser&&auth.currentUser.email)||"", emails},{merge:true}),"רשימת המנהלים עודכנה ✔"); };
+  const inp=h("input",{id:"f_adminEmail",type:"email",dir:"ltr",placeholder:"name@gmail.com",autocomplete:"off",value:S.draft.adminEmail??"",oninput:e=>{S.draft.adminEmail=e.target.value;}});
+  const add=()=>{ const v=String(inp.value||"").trim().toLowerCase();
+    if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)){ toast("כתובת מייל לא תקינה"); return; }
+    if(list.includes(v) || v===String(a.owner).toLowerCase()){ toast("כבר ברשימה"); return; }
+    delete S.draft.adminEmail; save(list.concat([v])); };
+  return h("div",{class:"card"},
+    h("h2",null,"👥 מנהלים",h("span",{class:"count"},`${list.length+1}`)),
+    h("div",{class:"hint"},"מנהלים נכנסים ב״כניסת מארגן״ עם חשבון הגוגל שלהם. הם יכולים לנהל רשימה, כוחות, תוצאות, תשלומים והגדרות, אבל לא רואים דירוגים, שוערים, טלפונים מהרשימה שלך או ״לא ביחד״, ולא יכולים להוסיף או להסיר מנהלים."),
+    h("div",{class:"payrow"},h("span",{class:"pn"},"👑 אתה"),h("span",{class:"ps",dir:"ltr"},a.owner||""),h("span",{style:"width:32px"})),
+    list.map(e=>h("div",{class:"payrow"},h("span",{class:"pn",dir:"ltr",style:"text-align:right"},e),h("span",{class:"ps"},"מנהל"),
+      h("button",{class:"ic x",title:"הסר",onclick:()=>save(list.filter(x=>x!==e))},"×"))),
+    h("div",{class:"addrow",style:"margin-top:10px"},inp,h("button",{class:"btn",onclick:add},"הוסף")));
 }
 function prioCard(){
   const c=S.cfg, names=knownNames(), set=new Set(c.priority||[]);
@@ -1972,6 +2014,7 @@ function viewSettings(){
         h("button",{class:"btn",onclick:setAutoOpen},"קבע")),
       future ? h("button",{class:"linkbtn",onclick:()=>setCfg({openAt:null},"הפתיחה האוטומטית בוטלה")},"בטל פתיחה אוטומטית") : null),
     prioCard(),
+    S.isOwner ? adminsCard() : null,
     h("div",{class:"card"},
       h("h2",null,"📍 פרטי המשחק"),
       h("div",{class:"hint"},"יופיעו לכולם בראש הדף, עם כפתור ניווט."),

@@ -1,6 +1,7 @@
 // Push notifications for the weekly football app.
 const { onDocumentWritten, onDocumentUpdated } = require("firebase-functions/v2/firestore");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
+const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { setGlobalOptions } = require("firebase-functions/v2");
 const { initializeApp } = require("firebase-admin/app");
 const { getFirestore } = require("firebase-admin/firestore");
@@ -257,4 +258,82 @@ exports.onPayMark = onDocumentWritten("payMarks/{id}", async (event) => {
   await sendAll(toks.map((t) => ({ ...t,
     title: a.m === "cash" ? `💵 ${name} הביא לך מזומן` : `💳 ${name} שילם לך בביט`,
     body: `${price}₪ על המגרש · אפשר לראות מי עוד לא שילם באפליקציה` })));
+});
+
+
+// ---------- 5. team split for co-organizers ----------
+// Co-organizers can't read the ratings, so the server balances the teams with them.
+const DEF_RATING = 4;
+function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+function sizesFor(n, k) { const b = Math.floor(n / k), e = n % k; return Array.from({ length: k }, (_, i) => b + (i < e ? 1 : 0)); }
+function balance(players, k, apart) {
+  k = Math.max(1, Math.min(k, players.length));
+  const sizes = sizesFor(players.length, k);
+  const desc = (a, b) => b.r - a.r;
+  const allGK = shuffle(players.filter((p) => p.gk)).sort(desc);
+  const gks = allGK.slice(0, k), rest = shuffle(players.filter((p) => !p.gk).concat(allGK.slice(k).map((p) => ({ ...p, gk: false })))).sort(desc);
+  const teams = sizes.map(() => []);
+  shuffle([...Array(k).keys()]).slice(0, gks.length).forEach((t, i) => teams[t].push(gks[i]));
+  let idx = 0, fwd = true;
+  const step = () => { if (fwd) { if (idx === k - 1) fwd = false; else idx++; } else { if (idx === 0) fwd = true; else idx--; } };
+  for (const p of rest) { let g = 0; while (teams[idx].length >= sizes[idx] && g++ < k * 3) step(); teams[idx].push(p); step(); }
+  const pairs = (apart || []).map((x) => [norm(x.a), norm(x.b)]);
+  const avg = players.reduce((a, p) => a + p.r, 0) / players.length;
+  const sum = (t) => t.reduce((a, p) => a + p.r, 0);
+  const cost = () => {
+    let c = teams.reduce((a, t) => a + (sum(t) - t.length * avg) ** 2, 0);
+    if (pairs.length) for (const t of teams) { const ns = new Set(t.map((p) => norm(p.name))); for (const [a, b] of pairs) if (ns.has(a) && ns.has(b)) c += 1000; }
+    return c;
+  };
+  let c = cost();
+  for (let it = 0; it < 5000 && k > 1; it++) {
+    const a = Math.floor(Math.random() * k); let b = Math.floor(Math.random() * (k - 1)); if (b >= a) b++;
+    const i = Math.floor(Math.random() * teams[a].length), j = Math.floor(Math.random() * teams[b].length);
+    if (!!teams[a][i].gk !== !!teams[b][j].gk) continue;
+    [teams[a][i], teams[b][j]] = [teams[b][j], teams[a][i]];
+    const nc = cost(); if (nc <= c + 1e-9) c = nc; else [teams[a][i], teams[b][j]] = [teams[b][j], teams[a][i]];
+  }
+  return shuffle(teams).map((t) => t.map((p) => p.name).sort((x, y) => x.localeCompare(y, "he")));
+}
+function buildOption(main, subs, k, apart) {
+  const r = new Map(main.concat(subs).map((p) => [p.name, p.r]));
+  const T = balance(main, k, apart).map((ps) => ({ players: ps, subs: [] }));
+  const sum = (t) => t.players.concat(t.subs).reduce((a, n) => a + (r.get(n) || DEF_RATING), 0);
+  subs.slice().sort((a, b) => b.r - a.r).forEach((p) => {
+    let best = 0;
+    T.forEach((t, i) => { const b = T[best]; if (t.subs.length < b.subs.length || (t.subs.length === b.subs.length && sum(t) < sum(b))) best = i; });
+    T[best].subs.push(p.name);
+  });
+  return { teams: T, gks: main.concat(subs).filter((p) => p.gk).map((p) => p.name) };
+}
+const canon = (opt) => opt.teams.map((t) => t.players.slice().sort().join("|")).sort().join("||");
+function violations(opt, apart) {
+  let v = 0; for (const t of opt.teams) { const ns = new Set(t.players.map(norm)); for (const p of apart || []) if (ns.has(norm(p.a)) && ns.has(norm(p.b))) v++; } return v;
+}
+
+exports.makeTeams = onCall(async (req) => {
+  const email = req.auth && req.auth.token && req.auth.token.email_verified && String(req.auth.token.email).toLowerCase();
+  const own = await db.doc("owner/admins").get();
+  const o = own.exists ? own.data() : {};
+  const allowed = [String(o.owner || "").toLowerCase()].concat((o.emails || []).map((e) => String(e).toLowerCase()));
+  if (!email || !allowed.includes(email)) throw new HttpsError("permission-denied", "not an organizer");
+
+  const cfg = await getConfig();
+  const cap = Number(cfg.capacity) || 18;
+  const list = await getSignups();
+  const active = list.slice(0, cap);
+  if (active.length < 2) throw new HttpsError("failed-precondition", "not enough players");
+  const rd = await db.doc("ratings/main").get();
+  const roster = rd.exists ? rd.data().list || [] : [];
+  const apart = rd.exists ? rd.data().apart || [] : [];
+  const info = (name) => { const r = roster.find((x) => norm(x.n) === norm(name)); return { name, r: r ? r.r : DEF_RATING, gk: !!(r && r.gk) }; };
+  const subIds = new Set(Array.isArray(req.data && req.data.subs) ? req.data.subs : []);
+  const main = active.map((s) => info(s.name));
+  const subs = list.slice(cap).filter((s) => subIds.has(s.id)).map((s) => info(s.name));
+  const k = Math.min(Number(cfg.numTeams) || 3, active.length);
+  const a = buildOption(main, subs, k, apart); let b = null;
+  for (let t = 0; t < 60 && !b; t++) { const c = buildOption(main, subs, k, apart); if (canon(c) !== canon(a)) b = c; }
+  const doc = { at: Date.now(), options: b ? [a, b] : [a], status: "draft", chosen: null, mvpOpen: false, mvp: null };
+  await db.doc("teams/current").set(doc);
+  return { options: doc.options.length, bad: violations(a, apart) + (b ? violations(b, apart) : 0) };
 });
