@@ -224,6 +224,9 @@
   .phedit input{flex:1;min-width:0;border:1.5px solid var(--line);border-radius:12px;padding:10px 12px;background:#fff}
   .navrow{display:flex;justify-content:center;align-items:center;gap:14px;flex-wrap:wrap;margin-top:18px;font-size:13.5px;color:var(--muted)}
   .navrow a{color:var(--accent);font-weight:600;text-decoration:none}
+  .th.pickable{cursor:pointer}
+  .pickhint{font-size:12px;font-weight:600;color:var(--accent);background:#e7f3ea;border-radius:12px;padding:2px 8px;margin-inline-start:4px}
+  .teampick{padding:4px 14px 10px}
 </style>
 </head>
 <body>
@@ -267,7 +270,7 @@ const S = {
   tab: location.hash==="#teams" ? "teams" : location.hash==="#stats" ? "stats" : "list",
   showPaste:false, confirmReset:false, confirmCancel:false, copyText:null, busy:false,
   subSel:new Set(), showColors:false, showImg:null, showText:null,
-  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false, showGuest:false, confirmGuest:false, editHist:null, histDraft:null, editPhone:null, confirmDel:null, confirmResetHist:false
+  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false, showGuest:false, confirmGuest:false, editHist:null, histDraft:null, editPhone:null, colorPick:null, confirmDel:null, confirmResetHist:false
 };
 try{ S.promoted = JSON.parse(localStorage.getItem("promoted")||"[]"); }catch(e){}
 let dismissedSug=new Set(); try{ dismissedSug=new Set(JSON.parse(localStorage.getItem("dismissedSug")||"[]")); }catch(e){}
@@ -326,6 +329,16 @@ function colorSlots(k){
   return out;
 }
 const colorOf = i => COLORS[colorSlots(Math.max(i+1, S.cfg.numTeams))[i]];
+// colors of one option's teams: chosen per option by the organizer, else the default colors
+function optColorSlots(opt){
+  const k=(opt&&opt.teams||[]).length, base=colorSlots(Math.max(k,S.cfg.numTeams)).slice(0,k);
+  const src=Array.isArray(opt&&opt.colors)?opt.colors:[];
+  const out=[], used=new Set();
+  for(let i=0;i<k;i++){ const c=src[i]; if(Number.isInteger(c)&&c>=0&&c<COLORS.length&&!used.has(c)){ out.push(c); used.add(c); } else out.push(null); }
+  for(let i=0;i<k;i++) if(out[i]==null){ let c=base[i]; if(used.has(c)){ c=0; while(used.has(c)) c++; } out[i]=c; used.add(c); }
+  return out;
+}
+const optColor = (opt,i) => COLORS[optColorSlots(opt)[i]];
 const lsGet = k => { try{ return localStorage.getItem(k)||""; }catch(e){ return ""; } };
 const lsSet = (k,v) => { try{ localStorage.setItem(k,v); }catch(e){} };
 const isOpen = () => !!S.cfg.open || (!!S.cfg.openAt && Date.now()>=S.cfg.openAt);
@@ -690,7 +703,7 @@ const gkSet = opt => new Set((opt.gks||[]).map(norm));
 // ---------- results & stats ----------
 function saveResults(){
   const T=S.teams; if(!T||T.status!=="final") return;
-  const opt=T.options[T.chosen??0], k=opt.teams.length, slots=colorSlots(Math.max(k,S.cfg.numTeams));
+  const opt=T.options[T.chosen??0], slots=optColorSlots(opt);
   const wins=S.resDraft||opt.teams.map(()=>0);
   const rec={at:T.at, date:Date.now(), teams:opt.teams.map((t,i)=>({players:t.players, subs:t.subs||[], wins:wins[i]||0, color:slots[i]}))};
   run(()=>setDoc(doc(db,"history",String(T.at)), rec, {merge:true}), "התוצאות נשמרו 🏆");
@@ -806,7 +819,7 @@ function payRemindText(){
 function optionLines(opt){
   const gk=gkSet(opt);
   const nm=n=>gk.has(norm(n))?`${n} 🧤`:n;
-  return opt.teams.map((tm,i)=>{ const c=colorOf(i); return `${c.e} ${c.n}: ${tm.players.map(nm).join(", ")}`+(tm.subs&&tm.subs.length?` (מחליפים: ${tm.subs.map(nm).join(", ")})`:""); }).join("\n");
+  return opt.teams.map((tm,i)=>{ const c=optColor(opt,i); return `${c.e} ${c.n}: ${tm.players.map(nm).join(", ")}`+(tm.subs&&tm.subs.length?` (מחליפים: ${tm.subs.map(nm).join(", ")})`:""); }).join("\n");
 }
 function optionText(i){ return `⚽ ${OPT_NAMES[i]}\n\n${optionLines(S.teams.options[i])}`; }
 function voteText(){ return `🗳️ הצבעה על הכוחות להשבוע!\nאופציה א׳ או אופציה ב׳? מצביעים כאן:\n${pageUrl()}#teams`; }
@@ -838,8 +851,8 @@ function rrect(ctx,x,y,w,h,r){ ctx.beginPath(); if(ctx.roundRect) ctx.roundRect(
 function imgGroups(opt){ const k=opt.teams.length, per=k<=4?k:Math.ceil(k/2), g=[]; for(let i=0;i<k;i+=per) g.push(opt.teams.slice(i,i+per).map((t,j)=>({t,idx:i+j}))); return {per,groups:g}; }
 function groupH(g){ return IMG.HEAD + Math.max(1,...g.map(c=>c.t.players.length+(c.t.subs||[]).length))*IMG.ROW + 8; }
 function sectionH(sec){ const L=imgGroups(sec.opt); return (sec.label?74:0) + L.groups.reduce((a,g)=>a+groupH(g)+IMG.GAP,0); }
-function drawCol(ctx,t,idx,x,y,w,h,gk){
-  const c=colorOf(idx), light=lum(c.c)>0.62;
+function drawCol(ctx,t,idx,x,y,w,h,gk,c){
+  const light=lum(c.c)>0.62;
   ctx.save(); rrect(ctx,x,y,w,h,22); ctx.fillStyle="#fff"; ctx.fill(); ctx.clip();
   ctx.fillStyle=c.c; ctx.fillRect(x,y,w,IMG.HEAD);
   if(c.c==="#ffffff"){ ctx.fillStyle="#e3e8e1"; ctx.fillRect(x,y+IMG.HEAD-3,w,3); }
@@ -874,7 +887,7 @@ function buildCanvas(title, sections){
   for(const sec of sections){
     if(sec.label){ ctx.textAlign="right"; ctx.fillStyle="#14201a"; setFont(ctx,800,46); ctx.fillText(sec.label,W-PAD,y+30); y+=74; }
     const L=imgGroups(sec.opt), n=L.per, colW=(W-2*PAD-(n-1)*GAP)/n, gk=gkSet(sec.opt);
-    for(const g of L.groups){ const gh=groupH(g); g.forEach((c,j)=>drawCol(ctx,c.t,c.idx,W-PAD-(j+1)*colW-j*GAP,y,colW,gh,gk)); y+=gh+GAP; }
+    for(const g of L.groups){ const gh=groupH(g); g.forEach((c,j)=>drawCol(ctx,c.t,c.idx,W-PAD-(j+1)*colW-j*GAP,y,colW,gh,gk,optColor(sec.opt,c.idx))); y+=gh+GAP; }
   }
   ctx.textAlign="center"; ctx.fillStyle="#6b776f"; setFont(ctx,500,26);
   if(legend) ctx.fillText(legend,W/2,H-80);
@@ -1165,13 +1178,29 @@ function viewList(){
 }
 
 // --- teams view ---
-function teamCard(tm,i,showPow,opt){
-  const c=colorOf(i), gk=gkSet(opt||{});
+function setTeamColor(optIdx, i, ci){
+  const T=S.teams; if(!T) return;
+  const options=T.options.map((o,j)=>{
+    if(j!==optIdx) return o;
+    const arr=optColorSlots(o), k=arr.indexOf(ci);
+    if(k>=0 && k!==i) arr[k]=arr[i];   // swap so each team keeps a unique color
+    arr[i]=ci;
+    return {...o, colors:arr};
+  });
+  S.teams={...T, options}; S.colorPick=null; render();
+  run(()=>updateDoc(teamsRef,{options}), `הצבע עודכן ל${COLORS[ci].n} ✔`);
+}
+function teamCard(tm,i,showPow,opt,optIdx){
+  const c=optColor(opt,i), gk=gkSet(opt||{});
   const pow=showPow ? tm.players.reduce((a,n)=>a+ratingOf(n),0)/Math.max(1,tm.players.length) : null;
   const nm=p=>gk.has(norm(p))?`${p} 🧤`:p;
+  const key=`${optIdx}:${i}`, picking=S.isAdmin && S.colorPick===key, cur=optColorSlots(opt)[i];
   return h("div",{class:"team",style:`border-top:5px solid ${c.c==="#ffffff"?"#d1d5db":c.c}`},
-    h("div",{class:"th"},h("span",{class:"sw",style:`background:${c.c}`}),c.n,
+    h("div",{class:"th"+(S.isAdmin?" pickable":""),onclick:S.isAdmin?()=>{ S.colorPick=picking?null:key; render(); }:null},
+      h("span",{class:"sw",style:`background:${c.c}`}),c.n,
+      S.isAdmin ? h("span",{class:"pickhint"},picking?"סגור":"🎨 שנה צבע") : null,
       h("small",null,`${tm.players.length} שחקנים`+(pow!=null?` · כוח ${pow.toFixed(1)}`:""))),
+    picking ? h("div",{class:"swatches teampick"},COLORS.map((col,ci)=>h("button",{class:"swatch"+(ci===cur?" on":""),"aria-label":col.n,title:col.n,style:`background:${col.c}`,onclick:e=>{ e.stopPropagation(); setTeamColor(optIdx,i,ci); }}))) : null,
     h("ul",null,tm.players.map(p=>h("li",null,nm(p))),
       (tm.subs||[]).map(p=>h("li",{class:"sub"},"🔄 "+nm(p)))));
 }
@@ -1187,7 +1216,7 @@ function optionBlock(opt, idx, mode){
       voting ? h("span",{class:"vcount"},cnt===1?"קול אחד":`${cnt} קולות`) : null) : null,
     bad ? h("div",{class:"stale",style:"margin-top:6px"},`⚠️ ${bad} זוגות ״לא ביחד״ באותה קבוצה`) : null,
     voting && total ? h("div",{class:"vbar"},h("i",{style:`width:${cnt/total*100}%`})) : null,
-    h("div",{class:"teams"},opt.teams.map((tm,i)=>teamCard(tm,i,S.isAdmin,opt))),
+    h("div",{class:"teams"},opt.teams.map((tm,i)=>teamCard(tm,i,S.isAdmin,opt,idx))),
     mode==="vote" ? h("button",{class:"btn full big"+(mine?" chosen":""),style:"margin-top:10px",onclick:()=>vote(idx)}, mine?`✔ הצבעת ל${OPT_NAMES[idx]}`:`אני בעד ${OPT_NAMES[idx]}`) : null,
     mode==="admin" ? h("div",null,
       h("div",{class:"hint",style:"margin-top:10px"}, S.teams.options.length>1 ? "שליחת האופציה הזו בנפרד:" : "שליחה:"),
@@ -1204,7 +1233,7 @@ function splitControls(){
     h("h2",null,"🎲 חלוקת כוחות"),
     h("div",{class:"hint"},active.length?`${active.length} שחקנים ל-${k} קבוצות (${[...new Set(sz)].sort((a,b)=>b-a).join(" / ")} בקבוצה)`+(subsN?` + ${subsN} מחליפים`:"")+(gkN?` · ${gkN} שוערים 🧤`:"")+(S.apart.length?` · ${S.apart.length} זוגות ״לא ביחד״`:"")+". יתקבלו 2 אופציות מאוזנות.":"אין עדיין שחקנים ברשימה."),
     h("button",{class:"linkbtn",onclick:()=>{S.showColors=!S.showColors;render();}},
-      S.showColors?"סגור צבעים":"🎨 צבעי הקבוצות ", !S.showColors ? slots.map(c=>h("span",{class:"dot",style:`background:${COLORS[c].c}`})) : null),
+      S.showColors?"סגור צבעים":"🎨 צבעי ברירת מחדל ", !S.showColors ? slots.map(c=>h("span",{class:"dot",style:`background:${COLORS[c].c}`})) : null),
     S.showColors ? h("div",{class:"colors"}, slots.map((cur,slot)=>h("div",{class:"crow"},
       h("div",{class:"clbl"},`קבוצה ${slot+1}: `,h("b",null,COLORS[cur].n)),
       h("div",{class:"swatches"},COLORS.map((col,ci)=>h("button",{class:"swatch"+(ci===cur?" on":""),"aria-label":col.n,style:`background:${col.c}`,onclick:()=>pickColor(slot,ci)})))))) : null,
@@ -1221,7 +1250,7 @@ function resultsCard(){
   return h("div",{class:"card"},
     h("h2",null,"🏆 תוצאות הערב", saved?h("span",{class:"count"},"✔ נשמר"):null),
     h("div",{class:"hint"},"כמה משחקים כל קבוצה ניצחה? התוצאות נכנסות לטבלה."),
-    opt.teams.map((t,i)=>{ const c=colorOf(i); return h("div",{class:"stepper"},
+    opt.teams.map((t,i)=>{ const c=optColor(opt,i); return h("div",{class:"stepper"},
       h("div",{class:"lbl"},h("b",null,h("span",{class:"dot",style:`background:${c.c};margin-inline-end:6px`}),c.n)),
       h("div",{class:"ctrl"},
         h("button",{onclick:()=>{ if(d[i]>0){ d[i]--; render(); } }},"−"),
@@ -1271,7 +1300,7 @@ function viewTeams(){
     if(T.mvp) out.push(h("div",{class:"banner mvp"},`⭐ ה-MVP של הערב: ${T.mvp}`));
     if(T.mvpOpen || S.isAdmin) out.push(mvpCard(opt));
     out.push(h("div",{class:"banner final"},"✅ אלה הכוחות להשבוע"+(T.options.length>1?` (${OPT_NAMES[idx]})`:"")));
-    out.push(h("div",{class:"teams"},opt.teams.map((tm,i)=>teamCard(tm,i,S.isAdmin,opt))));
+    out.push(h("div",{class:"teams"},opt.teams.map((tm,i)=>teamCard(tm,i,S.isAdmin,opt,idx))));
     if(S.isAdmin){
       out.push(h("div",{class:"card"},h("h2",null,"📤 שליחת הכוחות"),imageShare("final", finalText()),
         T.options.length>1 ? h("button",{class:"linkbtn",onclick:()=>setStatus("draft")},"↩ חזור לשתי האופציות") : null));
