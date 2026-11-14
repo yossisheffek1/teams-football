@@ -299,6 +299,19 @@
   .paylinktxt{background:#f5f0ff;border-radius:12px;padding:10px 12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   .paid-ok .linkbtn{display:inline;margin-inline-start:8px;padding:0}
   .slimcard{padding:10px 14px}
+  .tiles{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px;align-items:start}
+  .tiles > .card{margin-top:0}
+  .tile{background:#fff;border:1px solid var(--line);border-radius:14px;padding:12px 10px;display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:start;min-height:84px}
+  .tile:active{transform:scale(.98)}
+  .tile .ticon{font-size:22px;line-height:1}
+  .tile b{font-size:15px;font-weight:800;margin-top:4px}
+  .tile small{font-size:12.5px;color:var(--muted);line-height:1.35}
+  .tile.danger{background:#fff7f6;border-color:#f7d4cf}
+  .tile.danger b{color:var(--danger)}
+  .tile-open{grid-column:1 / -1;border:2px solid var(--accent)}
+  .tile-head{cursor:pointer}
+  .tile-head .chev{margin-inline-start:auto;font-size:12px;color:var(--muted)}
+  .tile-head .count + .chev{margin-inline-start:8px}
 </style>
 </head>
 <body>
@@ -343,7 +356,7 @@ const S = {
   tab: location.hash==="#teams" ? "teams" : location.hash==="#stats" ? "stats" : "list",
   showPaste:false, confirmReset:false, confirmCancel:false, copyText:null, busy:false,
   subSel:new Set(), showColors:false, showImg:null, showText:null,
-  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false, showGuest:false, confirmGuest:false, editHist:null, histDraft:null, editPhone:null, colorPick:null, swapSel:null, myToken:null, adminPushOk:false, lastWin:null, winBusy:false, playersView:"rate", prioBanner:null, payForm:false, confirmPayCancel:false, busyTeams:false, pushTest:{uids:[],names:[]}, testing:false, showContacts:false, phoneNames:{}, confirmDel:null, confirmResetHist:false
+  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false, showGuest:false, confirmGuest:false, editHist:null, histDraft:null, editPhone:null, colorPick:null, swapSel:null, myToken:null, adminPushOk:false, lastWin:null, winBusy:false, playersView:"rate", prioBanner:null, payForm:false, confirmPayCancel:false, busyTeams:false, pushTest:{uids:[],names:[]}, testing:false, showContacts:false, phoneNames:{}, setOpen:null, confirmDel:null, confirmResetHist:false
 };
 try{ S.promoted = JSON.parse(localStorage.getItem("promoted")||"[]"); }catch(e){}
 let dismissedSug=new Set(); try{ dismissedSug=new Set(JSON.parse(localStorage.getItem("dismissedSug")||"[]")); }catch(e){}
@@ -2005,8 +2018,7 @@ function contactsList(){
 }
 function contactsCard(){
   const list=contactsList();
-  if(!S.showContacts) return h("div",{class:"card slimcard"},
-    h("button",{class:"btn ghost full",onclick:()=>{S.showContacts=true;render();}},`📱 אנשי קשר (${list.length})`));
+
   const allText=list.map(c=>`${c.name||"ללא שם"}: ${prettyPhone(c.phone)}`).join("\n");
   return h("div",{class:"card"},
     h("h2",null,"📱 אנשי קשר",h("span",{class:"count"},list.length)),
@@ -2016,8 +2028,40 @@ function contactsCard(){
       h("a",{class:"ps",dir:"ltr",href:`tel:+${c.phone}`,style:"text-decoration:none"},prettyPhone(c.phone)),
       h("a",{class:"ic",title:"וואטסאפ",href:`https://wa.me/${c.phone}`,target:"_blank",rel:"noopener",style:"text-decoration:none"},"💬")))) : h("div",{class:"empty"},"עוד אף אחד לא מסר טלפון."),
     h("div",{class:"winlinks"},
-      list.length ? h("button",{class:"linkbtn",onclick:()=>copy(allText)},"📋 העתק את כל הרשימה") : null,
-      h("button",{class:"linkbtn muted",onclick:()=>{S.showContacts=false;render();}},"סגור")));
+      list.length ? h("button",{class:"linkbtn",onclick:()=>copy(allText)},"📋 העתק את כל הרשימה") : null));
+}
+// settings as a grid of small tiles; tapping a tile opens its card in place
+function settingsSummary(title){
+  const c=S.cfg;
+  if(title.includes("הרשמה") && !title.includes("עדיפות")) return isOpen()?"פתוחה לכולם":isPrioOpen()?"🎟️ לקבועים":c.openAt&&c.openAt>Date.now()?`נפתחת ${fmtTime(c.openAt)}`:"סגורה";
+  if(title.includes("עדיפות")) return `${(c.priority||[]).length} קבועים`+((c.prioHours||0)?` · ${c.prioHours} ש׳ קודם`:"");
+  if(title.includes("מנהלים")) return `${(S.admins.emails||[]).length+1} מנהלים`;
+  if(title.includes("אנשי קשר")) return `${contactsList().length} טלפונים`;
+  if(title.includes("פרטי המשחק")) { const g=game(); return [g.day,g.time].filter(Boolean).join(" ")||"לא הוגדר"; }
+  if(title.includes("התראות")) return ({all:"לכולם",admin:"רק אני",select:"נבחרים"})[c.pushMode||"all"];
+  if(title.includes("ביטולים")) return ((c.lockHours||0)?`חסימה ${c.lockHours} ש׳`:"בלי חסימה")+(c.allowGuests===false?" · בלי אורחים":"");
+  if(title.includes("הגדרות המשחק")) return `${c.capacity} שחקנים · ${c.numTeams} קבוצות`;
+  if(title.includes("שבוע חדש")) return "איפוס הרשימה";
+  return "";
+}
+function viewSettings(){
+  const cards=[].concat(settingsCards()).flat().filter(Boolean);
+  if(lsGet("settingsExpanded")) return cards;   // classic layout (debug)
+  const tiles=cards.map(card=>{
+    const h2=card.querySelector("h2"); if(!h2) return card;
+    const title=(h2.firstChild && h2.firstChild.nodeType===3 ? h2.firstChild.textContent : h2.textContent).trim();
+    const m=title.match(/^(\S+)\s+(.*)$/), icon=m?m[1]:"⚙️", name=m?m[2]:title;
+    if(S.setOpen===title){
+      card.classList.add("tile-open");
+      h2.classList.add("tile-head");
+      h2.append(h("span",{class:"chev"},"▲"));
+      h2.addEventListener("click",()=>{ S.setOpen=null; render(); });
+      return card;
+    }
+    return h("button",{class:"tile"+(title.includes("שבוע חדש")?" danger":""),onclick:()=>{ S.setOpen=title; render(); setTimeout(()=>{ const el=document.querySelector(".tile-open"); if(el) el.scrollIntoView({behavior:"smooth",block:"start"}); },30); }},
+      h("span",{class:"ticon"},icon), h("b",null,name), h("small",null,settingsSummary(title)));
+  });
+  return [h("div",{class:"tiles"},tiles)];
 }
 function adminsCard(){
   const a=S.admins, list=a.emails||[];
@@ -2050,7 +2094,7 @@ function prioCard(){
     att.length ? h("button",{class:"linkbtn",onclick:()=>{ const top=att.filter(a=>a.weeks>=3&&a.pct>=75).map(a=>norm(a.name)); if(!top.length){ toast("אין עדיין מספיק נתוני נוכחות"); return; } setCfg({priority:[...new Set([...(c.priority||[]),...top])]},`סומנו ${top.length} שחקנים עם 75%+ נוכחות`); }},"✨ סמן אוטומטית את מי שמגיע 75%+ מהשבועות") : null);
 }
 const toLocalInput=ms=>{ const t=new Date(ms-new Date(ms).getTimezoneOffset()*60000); return t.toISOString().slice(0,16); };
-function viewSettings(){
+function settingsCards(){
   const c=S.cfg, k=c.numTeams, cap=c.capacity, per=[...new Set(sizesFor(cap,k))].sort((a,b)=>b-a).join(" / ");
   const g=game(), d=S.draft;
   const field=(key,label,cur,attrs={})=>h("label",{class:"field"},h("span",null,label),
