@@ -238,6 +238,30 @@
   .switch i{position:absolute;top:3px;inset-inline-start:3px;width:24px;height:24px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:inset-inline-start .2s}
   .switch.on{background:var(--accent)}
   .switch.on i{inset-inline-start:25px}
+  .timer{text-align:center;padding:18px 14px}
+  .tlabel{font-size:20px;font-weight:800}
+  .timer.extra .tlabel{color:#b45309}
+  .timer.ended .tlabel{color:#dc2626;animation:blink 1s infinite}
+  @keyframes blink{50%{opacity:.35}}
+  .tclock{position:relative;width:240px;height:240px;margin:12px auto}
+  .tsvg{width:240px;height:240px;transform:rotate(-90deg) scaleY(-1)}
+  .tbg{fill:none;stroke:#e7efe5;stroke-width:12}
+  .tfg{fill:none;stroke:var(--accent);stroke-width:12;stroke-linecap:round;transition:stroke-dashoffset .25s linear}
+  .timer.extra .tfg{stroke:#f59e0b}
+  .timer.ended .tfg{stroke:#dc2626}
+  .tdisp{position:absolute;inset:0;display:grid;place-items:center;font-size:64px;font-weight:900;font-variant-numeric:tabular-nums;direction:ltr;letter-spacing:-1px}
+  .tdisp.hot{color:#dc2626}
+  .tctl{display:flex;gap:8px;align-items:center;justify-content:center;margin-top:6px}
+  .tctl.col{flex-direction:column;align-items:stretch}
+  .tctl .btn.ghost{padding:12px 10px}
+  .tmain{flex:1;max-width:170px}
+  .tbtn{margin-top:6px}
+  .tbtn.extra{background:#f59e0b;color:#1f1300}
+  .winbtns{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:8px}
+  .winbtn{border-radius:14px;padding:14px 8px;display:flex;flex-direction:column;align-items:center;gap:2px}
+  .winbtn b{font-size:18px}
+  .winbtn span{font-size:12.5px;opacity:.85}
+  .winbtn:active{transform:scale(.97)}
 </style>
 </head>
 <body>
@@ -996,6 +1020,140 @@ function pushBox(){
     h("div",{class:"pushask",style:"margin-top:4px;text-align:center"},"נודיע לך כשההרשמה נפתחת, כשמתפנה לך מקום וכשהכוחות מתפרסמים"));
 }
 
+
+// ---------- match timer ----------
+const TM = (()=>{ let t={}; try{ t=JSON.parse(localStorage.getItem("timer")||"{}"); }catch(e){} 
+  return {game:7, extra:2, phase:"idle", running:false, endAt:0, left:0, match:1, total:0, ...t}; })();
+function tmSave(){ lsSet("timer", JSON.stringify(TM)); }
+function tmLeft(){ return TM.running ? Math.max(0, TM.endAt-Date.now()) : TM.left; }
+let audioCtx=null, wakeLock=null, tmTick=null, lastBeep=-1;
+function unlockAudio(){ try{ audioCtx=audioCtx||new (window.AudioContext||window.webkitAudioContext)(); if(audioCtx.state==="suspended") audioCtx.resume(); }catch(e){} }
+function tone(freq, start, dur, vol=0.25, type="square"){
+  if(!audioCtx) return;
+  const o=audioCtx.createOscillator(), g=audioCtx.createGain(), t=audioCtx.currentTime+start;
+  o.type=type; o.frequency.setValueAtTime(freq,t);
+  g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(vol,t+0.02); g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+  o.connect(g); g.connect(audioCtx.destination); o.start(t); o.stop(t+dur+0.05);
+}
+function whistle(long){
+  // referee-style trill: fast warble around 2.6kHz
+  if(!audioCtx) return;
+  const n=long?3:1;
+  for(let k=0;k<n;k++){
+    const base=k*0.55, len=k===n-1&&long?0.9:0.35;
+    const o=audioCtx.createOscillator(), g=audioCtx.createGain(), lfo=audioCtx.createOscillator(), lg=audioCtx.createGain(), t=audioCtx.currentTime+base;
+    o.type="sine"; o.frequency.setValueAtTime(2600,t); lfo.frequency.setValueAtTime(28,t); lg.gain.setValueAtTime(180,t);
+    lfo.connect(lg); lg.connect(o.frequency);
+    g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(0.5,t+0.02); g.gain.setValueAtTime(0.5,t+len-0.05); g.gain.exponentialRampToValueAtTime(0.0001,t+len);
+    o.connect(g); g.connect(audioCtx.destination); o.start(t); lfo.start(t); o.stop(t+len+0.05); lfo.stop(t+len+0.05);
+  }
+  try{ navigator.vibrate && navigator.vibrate(long?[400,150,400,150,800]:[300]); }catch(e){}
+}
+async function keepAwake(on){
+  try{
+    if(on && "wakeLock" in navigator && !wakeLock){ wakeLock=await navigator.wakeLock.request("screen"); wakeLock.addEventListener("release",()=>{ wakeLock=null; }); }
+    if(!on && wakeLock){ await wakeLock.release(); wakeLock=null; }
+  }catch(e){}
+}
+document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="visible"){ if(TM.running) keepAwake(true); tmCheck(); render(); } });
+function tmStart(phase){
+  unlockAudio();
+  const mins = phase==="extra" ? TM.extra : TM.game;
+  Object.assign(TM,{phase, running:true, endAt:Date.now()+mins*60000, left:mins*60000, total:mins*60000});
+  lastBeep=-1; tmSave(); keepAwake(true); whistle(false); tmLoop(); render();
+}
+function tmPause(){ unlockAudio(); if(!TM.running) return; TM.left=tmLeft(); TM.running=false; tmSave(); keepAwake(false); render(); }
+function tmResume(){ unlockAudio(); if(TM.running||TM.left<=0) return; TM.endAt=Date.now()+TM.left; TM.running=true; tmSave(); keepAwake(true); tmLoop(); render(); }
+function tmAdjust(ms){
+  if(TM.running){ TM.endAt=Math.max(Date.now()+1000, TM.endAt+ms); }
+  else TM.left=Math.max(1000, TM.left+ms);
+  TM.total=Math.max(TM.total, tmLeft()); tmSave(); tmPaint();
+}
+function tmEndPhase(){
+  TM.running=false; TM.left=0;
+  TM.phase = TM.phase==="game" ? "gameover" : "over";
+  tmSave(); keepAwake(false); whistle(true); render();
+}
+function tmFinish(){ TM.running=false; TM.left=0; TM.phase="over"; tmSave(); keepAwake(false); render(); }
+function tmNext(){ TM.match=(TM.match||1)+1; TM.phase="idle"; TM.running=false; TM.left=0; tmSave(); render(); }
+function tmResetAll(){ Object.assign(TM,{phase:"idle",running:false,left:0,endAt:0,match:1,total:0}); tmSave(); keepAwake(false); render(); }
+function tmCheck(){
+  if(!TM.running) return;
+  const left=tmLeft();
+  const sec=Math.ceil(left/1000);
+  if(sec<=3 && sec>=1 && sec!==lastBeep){ lastBeep=sec; tone(1200,0,0.12,0.2,"sine"); }
+  if(left<=0) tmEndPhase();
+}
+function tmLoop(){
+  if(tmTick) return;
+  tmTick=setInterval(()=>{ if(!TM.running){ clearInterval(tmTick); tmTick=null; return; } tmCheck(); tmPaint(); },200);
+}
+const fmtClock = ms => { const s=Math.ceil(ms/1000); return `${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`; };
+function tmPaint(){
+  const d=$("tdisp"); if(!d) return;
+  const left=tmLeft(); d.textContent=fmtClock(left);
+  const ring=$("tring"); if(ring){ const p=TM.total?left/TM.total:1; ring.style.strokeDashoffset=String(691*(1-p)); }
+  d.classList.toggle("hot", TM.running && left<=10000);
+}
+if(TM.running) tmLoop();
+
+function winPick(){
+  const T=S.teams;
+  if(!S.isAdmin || !T || T.status!=="final") return null;
+  const opt=T.options[T.chosen??0], d=ensureResDraft();
+  return h("div",{class:"card"},
+    h("h2",null,"🏆 מי ניצח את המשחקון?"),
+    h("div",{class:"winbtns"},opt.teams.map((t,i)=>{ const c=optColor(opt,i), light=lum(c.c)>0.62;
+      return h("button",{class:"winbtn",style:`background:${c.c};color:${light?"#14201a":"#fff"}${c.c==="#ffffff"?";box-shadow:inset 0 0 0 2px #d1d5db":""}`,
+        onclick:()=>{ d[i]++; saveResults(); toast(`+1 ל${c.n} 🏆`); if(TM.phase==="over"||TM.phase==="gameover") tmNext(); else render(); }},
+        h("b",null,c.n), h("span",null,`${d[i]} ניצחונות`)); })),
+    h("button",{class:"linkbtn",onclick:()=>{ toast("תיקו, לא נספר ניצחון"); if(TM.phase==="over"||TM.phase==="gameover") tmNext(); }},"🤝 תיקו"),
+    h("div",{class:"hint"},"הניצחונות נשמרים אוטומטית בטבלה. אפשר לתקן בלשונית ״כוחות״."));
+}
+function viewTimer(){
+  const out=[], left=tmLeft(), ph=TM.phase, running=TM.running;
+  const label = ph==="extra" ? "⏱️ הארכה" : ph==="gameover" ? "⏰ הזמן נגמר!" : ph==="over" ? "🏁 המשחקון הסתיים" : `⚽ משחקון ${TM.match||1}`;
+  const showLeft = ph==="idle" ? TM.game*60000 : left;
+  const total = ph==="idle" ? TM.game*60000 : (TM.total||1);
+  const p = total ? showLeft/total : 1;
+  out.push(h("div",{class:"card timer"+(ph==="gameover"||ph==="over"?" ended":"")+(ph==="extra"?" extra":"")},
+    h("div",{class:"tlabel"},label),
+    h("div",{class:"tclock"},
+      (()=>{ const ns="http://www.w3.org/2000/svg", svg=document.createElementNS(ns,"svg"); svg.setAttribute("viewBox","0 0 240 240"); svg.setAttribute("class","tsvg");
+        const bg=document.createElementNS(ns,"circle"); bg.setAttribute("cx","120"); bg.setAttribute("cy","120"); bg.setAttribute("r","110"); bg.setAttribute("class","tbg");
+        const fg=document.createElementNS(ns,"circle"); fg.setAttribute("cx","120"); fg.setAttribute("cy","120"); fg.setAttribute("r","110"); fg.setAttribute("class","tfg"); fg.id="tring";
+        fg.style.strokeDasharray="691"; fg.style.strokeDashoffset=String(691*(1-p));
+        svg.append(bg,fg); return svg; })(),
+      h("div",{id:"tdisp",class:"tdisp"+(running&&left<=10000?" hot":"")},fmtClock(showLeft))),
+    // controls
+    ph==="idle" ? h("button",{class:"btn full big tbtn",onclick:()=>tmStart("game")},`▶️ התחל משחקון (${TM.game} דק׳)`) : null,
+    (ph==="game"||ph==="extra") ? h("div",{class:"tctl"},
+      h("button",{class:"btn ghost",onclick:()=>tmAdjust(-60000)},"−1 דק׳"),
+      running ? h("button",{class:"btn big tmain",onclick:tmPause},"⏸ עצור") : h("button",{class:"btn big tmain",onclick:tmResume},"▶️ המשך"),
+      h("button",{class:"btn ghost",onclick:()=>tmAdjust(60000)},"+1 דק׳")) : null,
+    (ph==="game"||ph==="extra") ? h("button",{class:"linkbtn",onclick:tmFinish},"⏹ סיים את המשחקון עכשיו") : null,
+    ph==="gameover" ? h("div",{class:"tctl col"},
+      TM.extra>0 ? h("button",{class:"btn full big tbtn extra",onclick:()=>tmStart("extra")},`⏱️ הארכה (${TM.extra} דק׳)`) : null,
+      h("button",{class:"btn ghost full",onclick:tmFinish},"✔ בלי הארכה, סיים")) : null,
+    ph==="over" && !(S.isAdmin && S.teams && S.teams.status==="final") ? h("button",{class:"btn full big tbtn",onclick:tmNext},"▶️ משחקון הבא") : null));
+  if(ph==="over"||ph==="gameover"||(ph==="idle"&&TM.match>1)) out.push(winPick());
+  // settings
+  const step=(lbl,key,min,max)=>h("div",{class:"stepper"},
+    h("div",{class:"lbl"},h("b",null,lbl)),
+    h("div",{class:"ctrl"},
+      h("button",{onclick:()=>{ if(TM[key]>min){ TM[key]--; tmSave(); render(); } }},"−"),
+      h("output",null,TM[key]),
+      h("button",{onclick:()=>{ if(TM[key]<max){ TM[key]++; tmSave(); render(); } }},"+")));
+  out.push(h("div",{class:"card"},
+    h("h2",null,"⚙️ זמנים"),
+    step("דקות למשחקון","game",1,60),
+    step("דקות הארכה (0 = בלי)","extra",0,15),
+    h("div",{class:"chips"},[[5,1],[7,2],[8,2],[10,3]].map(([g,e])=>h("button",{class:"chip"+(TM.game===g&&TM.extra===e?" on":""),onclick:()=>{ TM.game=g; TM.extra=e; tmSave(); render(); }},`${g}+${e}`))),
+    h("div",{class:"hint",style:"margin-top:8px"},"🔊 בסוף כל משחקון תהיה שריקה ורטט, והמסך יישאר דלוק כל עוד הטיימר רץ. שים את הטלפון על צלצול, לא על שקט."),
+    TM.match>1||ph!=="idle" ? h("button",{class:"linkbtn",onclick:tmResetAll},"↺ אפס טיימר ומספור משחקונים") : null));
+  return out;
+}
+
 // ---------- install (home screen) ----------
 let installEvt=null;
 window.addEventListener("beforeinstallprompt", e=>{ e.preventDefault(); installEvt=e; render(); });
@@ -1027,7 +1185,7 @@ function render(){
     h("div",{class:"bar"},h("i",{style:`width:${cap?Math.min(100,inN/cap*100):0}%`})));
 
   const voting = S.teams && S.teams.status==="voting";
-  const tabs=[["list","רשימה"],["teams", voting && !S.isAdmin ? "כוחות 🗳️" : "כוחות"],["stats","טבלה"]];
+  const tabs=[["list","רשימה"],["teams", voting && !S.isAdmin ? "כוחות 🗳️" : "כוחות"],["timer","טיימר"],["stats","טבלה"]];
   if(S.isAdmin) tabs.push(["players","שחקנים"],["settings","הגדרות"]);
   if(!tabs.find(t=>t[0]===S.tab)) S.tab="list";
   $("tabs").replaceChildren(...tabs.map(([k,l])=>h("button",{class:S.tab===k?"on":"",onclick:()=>{S.tab=k;S.copyText=null;S.confirmReset=false;render();}},l)));
@@ -1035,7 +1193,7 @@ function render(){
   const m=$("main");
   if(S.loading){ m.replaceChildren(h("div",{class:"loading"},"טוען…")); return; }
   const ae=document.activeElement, keepId=ae&&ae.id, val=ae&&ae.value;
-  const views={list:viewList,teams:viewTeams,stats:viewStats,players:viewPlayers,settings:viewSettings};
+  const views={list:viewList,teams:viewTeams,timer:viewTimer,stats:viewStats,players:viewPlayers,settings:viewSettings};
   m.replaceChildren(...[].concat(views[S.tab]()).flat().filter(Boolean), footer());
   if(keepId && $(keepId)){ const el=$(keepId); if(el.tagName==="INPUT" && el.type==="text") el.value=val; el.focus(); }
   if($("cd")) startCountdown();
@@ -1299,10 +1457,16 @@ function splitControls(){
       h("div",{class:"chips"},waiting.map(s=>h("button",{class:"chip"+(S.subSel.has(s.id)?" on":""),onclick:()=>{ S.subSel.has(s.id)?S.subSel.delete(s.id):S.subSel.add(s.id); render(); }},(S.subSel.has(s.id)?"✔ ":"")+s.name)))) : null,
     h("button",{class:"btn full big",style:"margin-top:12px",onclick:makeTeams},S.teams?"🔄 צור אופציות חדשות":"⚽ צור 2 אופציות לכוחות"));
 }
+function ensureResDraft(){
+  const T=S.teams; if(!T||T.status!=="final") return null;
+  const opt=T.options[T.chosen??0], saved=S.history.find(x=>x.id===String(T.at));
+  if(S.resFor!==T.at){ S.resFor=T.at; S.resDraft = saved ? opt.teams.map((_,i)=>((saved.teams||[])[i]||{}).wins||0) : opt.teams.map(()=>0); }
+  return S.resDraft;
+}
 function resultsCard(){
   const T=S.teams, opt=T.options[T.chosen??0];
   const saved=S.history.find(x=>x.id===String(T.at));
-  if(S.resFor!==T.at){ S.resFor=T.at; S.resDraft = saved ? opt.teams.map((_,i)=>(saved.teams[i]||{}).wins||0) : opt.teams.map(()=>0); }
+  ensureResDraft();
   const d=S.resDraft;
   return h("div",{class:"card"},
     h("h2",null,"🏆 תוצאות הערב", saved?h("span",{class:"count"},"✔ נשמר"):null),
