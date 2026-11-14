@@ -1347,8 +1347,8 @@ function render(){
     h("div",{class:"bar"},h("i",{style:`width:${cap?Math.min(100,inN/cap*100):0}%`})));
 
   const voting = S.teams && S.teams.status==="voting";
-  const tabs=[["list","רשימה"],["teams", voting && !S.isAdmin ? "כוחות 🗳️" : "כוחות"],["timer","טיימר"],["stats","טבלה"]];
-  if(S.isAdmin) tabs.push(["players","שחקנים"],["settings","הגדרות"]);
+  const tabs=[["list","רשימה"],["teams", voting && !S.isAdmin ? "כוחות 🗳️" : "כוחות"],["stats","טבלה"],["timer","טיימר"]];
+  if(S.isAdmin) tabs.push(["settings","הגדרות"],["players","שחקנים"]);
   if(!tabs.find(t=>t[0]===S.tab)) S.tab="list";
   $("tabs").replaceChildren(...tabs.map(([k,l])=>h("button",{class:S.tab===k?"on":"",onclick:()=>{S.tab=k;S.copyText=null;S.confirmReset=false;render();}},l)));
 
