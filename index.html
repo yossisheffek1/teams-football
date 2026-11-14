@@ -262,6 +262,7 @@
   .winbtn b{font-size:18px}
   .winbtn span{font-size:12.5px;opacity:.85}
   .winbtn:active{transform:scale(.97)}
+  .winlinks{display:flex;justify-content:center;gap:18px}
 </style>
 </head>
 <body>
@@ -286,7 +287,7 @@ const firebaseConfig = {
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { getMessaging, getToken, onMessage, isSupported } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging.js";
-import { getFirestore, doc, collection, onSnapshot, setDoc, addDoc, deleteDoc, getDoc, updateDoc, serverTimestamp, query, orderBy, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { getFirestore, doc, collection, onSnapshot, setDoc, addDoc, deleteDoc, getDoc, updateDoc, serverTimestamp, query, orderBy, writeBatch, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 // Web Push key from Firebase → Project settings → Cloud Messaging → Web Push certificates
 const VAPID_KEY = "BNFSlqmhear_HYeATMw44vdejYX5RTfxeVCk7DfbQvQqi3ccgjsMd4R2AvQrMT5ZqE_JeNSWzQgNpjLt8nmosnE";
@@ -305,7 +306,7 @@ const S = {
   tab: location.hash==="#teams" ? "teams" : location.hash==="#stats" ? "stats" : "list",
   showPaste:false, confirmReset:false, confirmCancel:false, copyText:null, busy:false,
   subSel:new Set(), showColors:false, showImg:null, showText:null,
-  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false, showGuest:false, confirmGuest:false, editHist:null, histDraft:null, editPhone:null, colorPick:null, swapSel:null, myToken:null, adminPushOk:false, confirmDel:null, confirmResetHist:false
+  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false, showGuest:false, confirmGuest:false, editHist:null, histDraft:null, editPhone:null, colorPick:null, swapSel:null, myToken:null, adminPushOk:false, lastWin:null, winBusy:false, confirmDel:null, confirmResetHist:false
 };
 try{ S.promoted = JSON.parse(localStorage.getItem("promoted")||"[]"); }catch(e){}
 let dismissedSug=new Set(); try{ dismissedSug=new Set(JSON.parse(localStorage.getItem("dismissedSug")||"[]")); }catch(e){}
@@ -1097,18 +1098,40 @@ function tmPaint(){
 }
 if(TM.running) tmLoop();
 
+// anyone can record who won a mini-game; a transaction keeps simultaneous taps from overwriting each other
+async function addWin(i, delta){
+  const T=S.teams; if(!T||T.status!=="final") return false;
+  const opt=T.options[T.chosen??0], slots=optColorSlots(opt), ref=doc(db,"history",String(T.at));
+  try{
+    await runTransaction(db, async tx=>{
+      const cur=await tx.get(ref), base=cur.exists()?cur.data():{};
+      const teams=opt.teams.map((t,j)=>({players:t.players, subs:t.subs||[], color:slots[j],
+        wins:Math.max(0, (((base.teams||[])[j]||{}).wins||0) + (j===i?delta:0))}));
+      const rec={at:T.at, date:base.date||Date.now(), teams}; if(base.mvp) rec.mvp=base.mvp;
+      tx.set(ref, rec);
+    });
+    return true;
+  }catch(e){ console.error(e); toast(e&&e.code==="permission-denied"?"אין הרשאה, המארגן צריך לעדכן את חוקי האבטחה":"לא נשמר, נסה שוב"); return false; }
+}
 function winPick(){
   const T=S.teams;
-  if(!S.isAdmin || !T || T.status!=="final") return null;
-  const opt=T.options[T.chosen??0], d=ensureResDraft();
+  if(!T || T.status!=="final") return S.isAdmin ? null : null;
+  const opt=T.options[T.chosen??0], saved=S.history.find(x=>x.id===String(T.at));
+  const wins=opt.teams.map((_,i)=>(((saved&&saved.teams)||[])[i]||{}).wins||0);
+  const ended=TM.phase==="over"||TM.phase==="gameover";
+  const last=S.lastWin && S.lastWin.at===T.at ? S.lastWin : null;
   return h("div",{class:"card"},
     h("h2",null,"🏆 מי ניצח את המשחקון?"),
     h("div",{class:"winbtns"},opt.teams.map((t,i)=>{ const c=optColor(opt,i), light=lum(c.c)>0.62;
       return h("button",{class:"winbtn",style:`background:${c.c};color:${light?"#14201a":"#fff"}${c.c==="#ffffff"?";box-shadow:inset 0 0 0 2px #d1d5db":""}`,
-        onclick:()=>{ d[i]++; saveResults(); toast(`+1 ל${c.n} 🏆`); if(TM.phase==="over"||TM.phase==="gameover") tmNext(); else render(); }},
-        h("b",null,c.n), h("span",null,`${d[i]} ניצחונות`)); })),
-    h("button",{class:"linkbtn",onclick:()=>{ toast("תיקו, לא נספר ניצחון"); if(TM.phase==="over"||TM.phase==="gameover") tmNext(); }},"🤝 תיקו"),
-    h("div",{class:"hint"},"הניצחונות נשמרים אוטומטית בטבלה. אפשר לתקן בלשונית ״כוחות״."));
+        onclick:async()=>{ if(S.winBusy) return; S.winBusy=true;
+          const ok=await addWin(i,1); S.winBusy=false;
+          if(ok){ S.lastWin={at:T.at,i}; toast(`+1 ל${c.n} 🏆`); if(ended) tmNext(); else render(); } }},
+        h("b",null,c.n), h("span",null,`${wins[i]} ניצחונות`)); })),
+    h("div",{class:"winlinks"},
+      h("button",{class:"linkbtn",onclick:()=>{ toast("תיקו, לא נספר ניצחון"); if(ended) tmNext(); }},"🤝 תיקו"),
+      last ? h("button",{class:"linkbtn muted",onclick:async()=>{ const ok=await addWin(last.i,-1); if(ok){ toast(`בוטל הניצחון של ${optColor(opt,last.i).n}`); S.lastWin=null; render(); } }},"↩ בטל את מה שסימנתי") : null),
+    h("div",{class:"hint"},"כל אחד יכול לסמן, והניצחון נשמר מיד בטבלה ומופיע אצל כולם. תסמנו רק פעם אחת לכל משחקון 🙂"));
 }
 function viewTimer(){
   const out=[], left=tmLeft(), ph=TM.phase, running=TM.running;
@@ -1135,8 +1158,8 @@ function viewTimer(){
     ph==="gameover" ? h("div",{class:"tctl col"},
       TM.extra>0 ? h("button",{class:"btn full big tbtn extra",onclick:()=>tmStart("extra")},`⏱️ הארכה (${TM.extra} דק׳)`) : null,
       h("button",{class:"btn ghost full",onclick:tmFinish},"✔ בלי הארכה, סיים")) : null,
-    ph==="over" && !(S.isAdmin && S.teams && S.teams.status==="final") ? h("button",{class:"btn full big tbtn",onclick:tmNext},"▶️ משחקון הבא") : null));
-  if(ph==="over"||ph==="gameover"||(ph==="idle"&&TM.match>1)) out.push(winPick());
+    ph==="over" ? h("button",{class:"btn full big tbtn",onclick:tmNext},"▶️ משחקון הבא") : null));
+  out.push(winPick());
   // settings
   const step=(lbl,key,min,max)=>h("div",{class:"stepper"},
     h("div",{class:"lbl"},h("b",null,lbl)),
@@ -1460,7 +1483,8 @@ function splitControls(){
 function ensureResDraft(){
   const T=S.teams; if(!T||T.status!=="final") return null;
   const opt=T.options[T.chosen??0], saved=S.history.find(x=>x.id===String(T.at));
-  if(S.resFor!==T.at){ S.resFor=T.at; S.resDraft = saved ? opt.teams.map((_,i)=>((saved.teams||[])[i]||{}).wins||0) : opt.teams.map(()=>0); }
+  const savedWins = opt.teams.map((_,i)=>(((saved&&saved.teams)||[])[i]||{}).wins||0), sig=T.at+":"+savedWins.join(",");
+  if(S.resFor!==T.at || S.resSig!==sig){ S.resFor=T.at; S.resSig=sig; S.resDraft=savedWins.slice(); }
   return S.resDraft;
 }
 function resultsCard(){
