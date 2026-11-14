@@ -263,6 +263,30 @@
   .winbtn span{font-size:12.5px;opacity:.85}
   .winbtn:active{transform:scale(.97)}
   .winlinks{display:flex;justify-content:center;gap:18px}
+  .regstate b{display:block;font-size:16px}
+  .regstate small{color:var(--muted)}
+  .seg3{display:flex;gap:6px;margin-top:10px}
+  .seg3 .btn{flex:1;padding:10px 4px;font-size:14.5px}
+  .seg3 .btn.on{background:var(--accent);color:#fff}
+  .prionote{background:#f5f0ff;color:#5b21b6;border-radius:12px;padding:9px 12px;font-size:14px;margin-bottom:10px;font-weight:600}
+  .seg{display:flex;background:#e2e8df;border-radius:12px;padding:4px;gap:4px;margin-top:12px}
+  .seg button{flex:1;padding:8px 4px;border-radius:9px;font-weight:700;font-size:14px;color:var(--muted)}
+  .seg button.on{background:#fff;color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.08)}
+  .att-t{width:100%;border-collapse:collapse;font-size:14px;margin-top:8px}
+  .att-t th{color:var(--muted);font-weight:600;font-size:12px;padding:6px 3px;border-bottom:1px solid var(--line);text-align:center}
+  .att-t td{padding:8px 3px;border-bottom:1px solid var(--line);text-align:center;vertical-align:middle}
+  .att-t .tn{text-align:start}
+  .att-t td small{display:block;color:var(--muted);font-size:11.5px;font-weight:400}
+  .dots{display:flex;gap:3px;direction:ltr;justify-content:center}
+  .dots i{width:10px;height:10px;border-radius:3px;background:#e5e7eb}
+  .dots i.y{background:#22c55e}
+  .dots i.n{background:#cbd5e1}
+  .dots i.na{background:transparent;border:1px dashed #e5e7eb}
+  .tag{font-size:11.5px;font-weight:700;border-radius:20px;padding:3px 8px;white-space:nowrap}
+  .tag.hi{background:#dcfce7;color:#166534}
+  .tag.mid{background:#fef3c7;color:#92400e}
+  .tag.lo{background:#fee2e2;color:#991b1b}
+  .tag.new{background:#e0e7ff;color:#3730a3}
 </style>
 </head>
 <body>
@@ -298,15 +322,15 @@ const COLORS = [
   {n:"לבנים", c:"#ffffff", e:"⚪"}, {n:"סגולים", c:"#7c3aed", e:"🟣"}, {n:"ורודים", c:"#ec4899", e:"🩷"},
   {n:"חומים", c:"#92400e", e:"🟤"}
 ];
-const DEF_CFG = {capacity:18, numTeams:3, open:true, colors:[0,1,2,3,4,5,6,7], openAt:null, game:{day:"",time:"",place:""}, price:0, payLink:"", gameAt:null, lockHours:0, allowGuests:true, pushMode:"all"};
+const DEF_CFG = {capacity:18, numTeams:3, open:true, colors:[0,1,2,3,4,5,6,7], openAt:null, game:{day:"",time:"",place:""}, price:0, payLink:"", gameAt:null, lockHours:0, allowGuests:true, pushMode:"all", priority:[], prioHours:0, prioOpen:false};
 const OPT_NAMES = ["אופציה א׳","אופציה ב׳"];
 const S = {
-  cfg:{...DEF_CFG}, cfgLoaded:false, signups:[], signupsLoaded:false, ratings:[], apart:[], teams:null, votes:[], paid:new Set(), history:[], mvpVotes:[], lates:[], phones:{}, pushState:"unknown",
+  cfg:{...DEF_CFG}, cfgLoaded:false, signups:[], signupsLoaded:false, ratings:[], apart:[], teams:null, votes:[], paid:new Set(), history:[], weeks:[], mvpVotes:[], lates:[], phones:{}, pushState:"unknown",
   uid:null, isAdmin:false, loading:true, error:null,
   tab: location.hash==="#teams" ? "teams" : location.hash==="#stats" ? "stats" : "list",
   showPaste:false, confirmReset:false, confirmCancel:false, copyText:null, busy:false,
   subSel:new Set(), showColors:false, showImg:null, showText:null,
-  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false, showGuest:false, confirmGuest:false, editHist:null, histDraft:null, editPhone:null, colorPick:null, swapSel:null, myToken:null, adminPushOk:false, lastWin:null, winBusy:false, confirmDel:null, confirmResetHist:false
+  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false, showGuest:false, confirmGuest:false, editHist:null, histDraft:null, editPhone:null, colorPick:null, swapSel:null, myToken:null, adminPushOk:false, lastWin:null, winBusy:false, playersView:"rate", prioBanner:null, confirmDel:null, confirmResetHist:false
 };
 try{ S.promoted = JSON.parse(localStorage.getItem("promoted")||"[]"); }catch(e){}
 let dismissedSug=new Set(); try{ dismissedSug=new Set(JSON.parse(localStorage.getItem("dismissedSug")||"[]")); }catch(e){}
@@ -378,6 +402,10 @@ const optColor = (opt,i) => COLORS[optColorSlots(opt)[i]];
 const lsGet = k => { try{ return localStorage.getItem(k)||""; }catch(e){ return ""; } };
 const lsSet = (k,v) => { try{ localStorage.setItem(k,v); }catch(e){} };
 const isOpen = () => !!S.cfg.open || (!!S.cfg.openAt && Date.now()>=S.cfg.openAt);
+// priority ("regulars first") window
+const prioAt = () => S.cfg.openAt && (S.cfg.prioHours||0)>0 ? S.cfg.openAt - S.cfg.prioHours*3600000 : null;
+const isPrioOpen = () => !isOpen() && (!!S.cfg.prioOpen || (!!prioAt() && Date.now()>=prioAt()));
+const isPrio = name => (S.cfg.priority||[]).includes(norm(name));
 const game = () => {
   const g={day:"",time:"",place:"",...(S.cfg.game||{})};
   if(S.cfg.gameAt){ const d=new Date(S.cfg.gameAt); g.day=`יום ${DAYS[d.getDay()]} ${d.getDate()}.${d.getMonth()+1}`; g.time=`${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; }
@@ -436,6 +464,7 @@ async function checkAdmin(user){
     ratUnsub = onSnapshot(ratRef, s=>{ const d=s.exists()?s.data():{}; S.ratings=d.list||[]; S.apart=d.apart||[]; render(); }, ()=>{});
     registerAdminDevice();
     onSnapshot(collection(db,"phones"), q=>{ const m={}; q.docs.forEach(d=>{ m[d.id]=d.data().phone; }); S.phones=m; render(); }, ()=>{});
+    onSnapshot(collection(db,"weeks"), q=>{ S.weeks=q.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(a.date||a.at)-(b.date||b.at)); render(); }, ()=>{});
     onSnapshot(latesRef, s=>{ S.lates = s.exists() ? (s.data().list||[]) : []; render(); }, ()=>{});
     try{ const c=await getDoc(cfgRef); if(!c.exists()) await setDoc(cfgRef, DEF_CFG); }catch(e){}
   }
@@ -452,8 +481,11 @@ setTimeout(()=>{ if(S.loading){ S.loading=false; S.error="הטעינה לוקח�
 
 // auto-open timer + countdown
 let openTimer=null, cdTimer=null;
+let prioTimer=null;
 function armOpenTimer(){
-  clearTimeout(openTimer);
+  clearTimeout(openTimer); clearTimeout(prioTimer);
+  const pms = prioAt() ? prioAt()-Date.now() : -1;
+  if(pms>0 && pms<2**31-1) prioTimer=setTimeout(()=>{ render(); toast("🎟️ ההרשמה נפתחה לקבועים!"); }, pms+300);
   const ms = S.cfg.openAt ? S.cfg.openAt-Date.now() : -1;
   if(ms>0 && ms<2**31-1) openTimer=setTimeout(()=>{ render(); toast("🔓 ההרשמה נפתחה!"); }, ms+300);
 }
@@ -462,7 +494,7 @@ function startCountdown(){
   cdTimer=setInterval(()=>{
     const el=$("cd");
     if(!el){ clearInterval(cdTimer); cdTimer=null; return; }
-    const left=(S.cfg.openAt||0)-Date.now();
+    const left=Number(el.dataset.target||S.cfg.openAt||0)-Date.now();
     if(left<=0){ clearInterval(cdTimer); cdTimer=null; render(); return; }
     el.textContent=fmtLeft(left);
   },1000);
@@ -493,7 +525,10 @@ async function selfRegister(name){
   name = clean(name);
   if(!name){ toast("כתוב את השם שלך"); return; }
   if(S.signups.some(s=>norm(s.name)===norm(name))){ toast("השם הזה כבר ברשימה"); return; }
-  if(!isOpen()){ toast("ההרשמה עוד לא נפתחה"); return; }
+  if(!isOpen()){
+    if(!isPrioOpen()){ toast("ההרשמה עוד לא נפתחה"); return; }
+    if(!isPrio(name)){ toast(S.cfg.openAt?`כרגע רק לקבועים. ההרשמה לכולם תיפתח ${fmtFull(S.cfg.openAt)}`:"כרגע ההרשמה פתוחה רק לקבועים"); return; }
+  }
   if(!S.uid){ toast("רגע, מתחבר…"); return; }
   lsSet("myName", name);
   S.busy=true; render();
@@ -624,19 +659,27 @@ function togglePaid(id){
 }
 async function newWeek(){
   const batch=writeBatch(db);
+  const cap=S.cfg.capacity, played=S.signups.slice(0,cap);
+  if(played.length){
+    const T=S.teams, opt=T&&T.status==="final"?T.options[T.chosen??0]:null;
+    const subs=opt?opt.teams.flatMap(t=>t.subs||[]):[];
+    const wk={at:Date.now(), date:S.cfg.gameAt&&S.cfg.gameAt<Date.now()+2*86400000?S.cfg.gameAt:Date.now(),
+      players:[...new Set(played.map(s=>s.name).concat(subs))], waiting:S.signups.slice(cap).filter(s=>!subs.includes(s.name)).map(s=>s.name)};
+    batch.set(doc(db,"weeks",String(wk.at)), wk);
+  }
   S.signups.forEach(s=>batch.delete(doc(db,"signups",s.id)));
   S.votes.forEach(v=>batch.delete(doc(db,"votes",v.id)));
   S.mvpVotes.forEach(v=>batch.delete(doc(db,"mvpVotes",v.id)));
   batch.set(teamsRef,{options:[],at:0,status:"draft",chosen:null,mvpOpen:false,mvp:null});
   batch.set(paidRef,{paid:[]});
   let msg="התחלנו שבוע חדש ⚽";
-  const c={...S.cfg};
+  const c={...S.cfg, prioOpen:false};
   if(c.gameAt){ while(c.gameAt<=Date.now()) c.gameAt+=WEEK; }
   if(c.openAt){
     let t=c.openAt; while(t<=Date.now()) t+=WEEK;
     c.open=false; c.openAt=t; msg=`שבוע חדש ⚽ ההרשמה תיפתח ${fmtFull(t)}`;
   }
-  if(c.gameAt||c.openAt){ S.cfg=c; batch.set(cfgRef,c); }
+  S.cfg=c; batch.set(cfgRef,c);
   S.subSel.clear(); S.resDraft=null;
   await run(()=>batch.commit(), msg);
   armOpenTimer();
@@ -1204,7 +1247,7 @@ function render(){
     h("div",{class:"stats"},
       h("div",{class:"stat"},h("b",null,`${inN}/${cap}`),h("span",null,"רשומים")),
       h("div",{class:"stat"},h("b",null,wN),h("span",null,"בהמתנה")),
-      h("div",{class:"stat"},h("b",null,open?"פתוח":"סגור"),h("span",null,"הרשמה"))),
+      h("div",{class:"stat"},h("b",null,open?"פתוח":isPrioOpen()?"קבועים":"סגור"),h("span",null,"הרשמה"))),
     h("div",{class:"bar"},h("i",{style:`width:${cap?Math.min(100,inN/cap*100):0}%`})));
 
   const voting = S.teams && S.teams.status==="voting";
@@ -1290,12 +1333,26 @@ function myCard(){
             S.confirmCancel=false; selfCancel();
           }}, S.confirmCancel ? "בטוח? לחץ שוב לביטול" : "לא מגיע, בטל הרשמה"));
   }
-  if(!isOpen()){
+  if(!isOpen() && isPrioOpen()){
+    const regular=isPrio(lsGet("myName"));
+    S.prioBanner = h("div",{class:"prionote"}, regular
+      ? "🎟️ אתה ברשימת הקבועים, ההרשמה פתוחה לך עכשיו!"
+      : `🎟️ כרגע ההרשמה פתוחה רק לקבועים.`+(S.cfg.openAt?` לכולם: ${fmtFull(S.cfg.openAt)}`:""));
+  } else S.prioBanner=null;
+  if(!isOpen() && !isPrioOpen()){
+    const pa=prioAt();
+    if(pa && pa>Date.now() && isPrio(lsGet("myName")))
+      return h("div",{class:"card countdown"},
+        h("div",{class:"hint"},"🎟️ בתור קבוע, ההרשמה תיפתח לך "+fmtFull(pa)),
+        h("div",{class:"cdbig",id:"cd","data-target":String(pa)},fmtLeft(pa-Date.now())),
+        h("div",{class:"hint"},`לשאר השחקנים: ${fmtFull(S.cfg.openAt)}`),
+        pushBox());
     if(S.cfg.openAt && S.cfg.openAt>Date.now())
       return h("div",{class:"card countdown"},
         h("div",{class:"hint"},"🔒 ההרשמה תיפתח "+fmtFull(S.cfg.openAt)),
-        h("div",{class:"cdbig",id:"cd"},fmtLeft(S.cfg.openAt-Date.now())),
+        h("div",{class:"cdbig",id:"cd","data-target":String(S.cfg.openAt)},fmtLeft(S.cfg.openAt-Date.now())),
         h("div",{class:"hint"},"השאר את הדף פתוח, והכפתור יופיע ברגע שההרשמה תיפתח."),
+        pa && pa>Date.now() ? h("div",{class:"hint"},`🎟️ לקבועים ההרשמה נפתחת קודם: ${fmtFull(pa)}`) : null,
         pushBox());
     return h("div",{class:"card"},h("div",{class:"empty"},"🔒 ההרשמה סגורה כרגע. היא תיפתח בקרוב."),pushBox());
   }
@@ -1304,6 +1361,7 @@ function myCard(){
     onkeydown:e=>{ if(e.key==="Enter") selfRegister(e.target.value); }});
   return h("div",{class:"card reg"},
     h("h2",null, full ? "⏳ הרשמה לרשימת המתנה" : "✋ הרשמה למשחק"),
+    S.prioBanner,
     h("div",{class:"addrow"}, inp, h("button",{class:"btn",disabled:S.busy,onclick:()=>selfRegister(inp.value)}, S.busy?"…":"אני בא!")),
     h("input",{id:"myPhone",type:"tel",class:"phone-in",placeholder:"📱 טלפון (לא חובה, רק המארגן רואה)",autocomplete:"tel",inputmode:"tel",dir:"ltr",
       value:S.draft.myPhone ?? prettyPhone(lsGet("myPhone")), oninput:e=>{S.draft.myPhone=e.target.value;}}),
@@ -1611,6 +1669,53 @@ function viewStats(){
   return out;
 }
 
+// attendance from weekly snapshots ("new week") plus evenings in the results table
+function attendanceWeeks(){
+  const wk=S.weeks.map(w=>({date:w.date||w.at, players:w.players||[]}));
+  S.history.forEach(g=>{
+    const d=g.date||g.at; if(!g.teams||!g.teams.length) return;
+    if(wk.some(w=>Math.abs(w.date-d)<3*86400000)) return;
+    wk.push({date:d, players:g.teams.flatMap(t=>(t.players||[]).concat(t.subs||[]))});
+  });
+  return wk.sort((a,b)=>a.date-b.date);
+}
+function attendance(){
+  const wk=attendanceWeeks(), m=new Map();
+  wk.forEach((w,i)=>{ new Set(w.players.map(norm)).forEach(k=>{ const n=w.players.find(p=>norm(p)===k);
+    const a=m.get(k)||{name:n, first:i, came:[]}; a.came.push(i); m.set(k,a); }); });
+  const lates=new Map(); S.lates.forEach(x=>lates.set(norm(x.n),(lates.get(norm(x.n))||0)+1));
+  return [...m.values()].map(a=>{
+    const weeks=wk.length-a.first, attended=a.came.length, pct=Math.round(attended/weeks*100);
+    const set=new Set(a.came), recent=[]; for(let i=Math.max(0,wk.length-8);i<wk.length;i++) recent.push(i<a.first?null:set.has(i));
+    let streak=0; for(let i=wk.length-1;i>=a.first && set.has(i);i--) streak++;
+    let missRun=0; for(let i=wk.length-1;i>=a.first && !set.has(i);i--) missRun++;
+    const label = weeks<2 ? {t:"חדש",c:"new"} : pct>=80 ? {t:"קבוע",c:"hi"} : pct>=50 ? {t:"לפעמים",c:"mid"} : {t:"נדיר",c:"lo"};
+    return {name:a.name, weeks, attended, pct, recent, streak, missRun, late:lates.get(norm(a.name))||0, label};
+  }).sort((x,y)=>y.pct-x.pct || y.attended-x.attended || x.name.localeCompare(y.name,"he"));
+}
+function attendanceCard(){
+  const wk=attendanceWeeks(), att=attendance();
+  if(!wk.length) return h("div",{class:"card"},h("h2",null,"📅 נוכחות"),
+    h("div",{class:"empty"},"עוד אין נתונים. בכל פעם שתלחץ ״פתח רשימה חדשה״ בהגדרות, השבוע שהסתיים נשמר כאן."));
+  const n=Math.min(8,wk.length);
+  return h("div",{class:"card"},
+    h("h2",null,"📅 נוכחות",h("span",{class:"count"},`${wk.length} שבועות`)),
+    h("div",{class:"hint"},`ריבוע ירוק = הגיע, אפור = לא הגיע (${n} השבועות האחרונים, החדש מימין). רק אתה רואה את זה.`),
+    h("table",{class:"att-t"},
+      h("thead",null,h("tr",null,h("th",{class:"tn"},"שחקן"),h("th",null,"נוכחות"),h("th",null,"אחרונים"),h("th",null,""))),
+      h("tbody",null,att.map(a=>h("tr",null,
+        h("td",{class:"tn"},h("b",null,a.name),h("small",null,
+          (a.streak>=3?`🔥 ${a.streak} ברצף`:a.missRun>=2?`😴 ${a.missRun} שבועות לא בא`:"")+(a.late?` ⏰${a.late}`:""))),
+        h("td",null,h("b",null,`${a.pct}%`),h("small",null,`${a.attended}/${a.weeks}`)),
+        h("td",null,h("div",{class:"dots"},a.recent.map(r=>h("i",{class:r==null?"na":r?"y":"n"})))),
+        h("td",null,h("span",{class:"tag "+a.label.c},a.label.t)))))));
+}
+function playersSeg(){
+  const v=S.playersView||"rate";
+  return h("div",{class:"seg"},
+    h("button",{class:v==="rate"?"on":"",onclick:()=>{S.playersView="rate";render();}},"⭐ דירוג ופרטים"),
+    h("button",{class:v==="att"?"on":"",onclick:()=>{S.playersView="att";render();}},"📅 נוכחות"));
+}
 function viewPlayers(){
   const all=new Map();
   S.ratings.forEach(r=>all.set(norm(r.n),r.n));
@@ -1620,9 +1725,11 @@ function viewPlayers(){
     onkeydown:e=>{ if(e.key==="Enter"&&e.target.value.trim()){ setRating(clean(e.target.value),DEF_RATING); e.target.value=""; } }});
   const sel=(key)=>h("select",{class:"sel",onchange:e=>{S.draft[key]=e.target.value;}},
     h("option",{value:""},"בחר שחקן"), names.map(n=>{ const o=h("option",{value:n},n); if(S.draft[key]===n) o.selected=true; return o; }));
+  if(S.playersView==="att") return [playersSeg(), attendanceCard()];
   const sugs=ratingSuggestions();
   const lateCount=new Map(); S.lates.forEach(x=>{ const k=norm(x.n); const o=lateCount.get(k)||{n:x.n,c:0,last:0}; o.c++; o.last=Math.max(o.last,x.at||0); lateCount.set(k,o); });
   return [
+    playersSeg(),
     sugs.length ? h("div",{class:"card sug"},
       h("h2",null,"💡 הצעות לעדכון דירוג"),
       h("div",{class:"hint"},"לפי התוצאות בטבלה מאז הדירוג האחרון של כל שחקן."),
@@ -1668,6 +1775,31 @@ function viewPlayers(){
   ];
 }
 
+function knownNames(){
+  const m=new Map();
+  const add=n=>{ if(n && !m.has(norm(n))) m.set(norm(n),n); };
+  S.ratings.forEach(r=>add(r.n)); S.signups.forEach(s=>add(s.name)); S.weeks.forEach(w=>(w.players||[]).forEach(add));
+  return [...m.values()].sort((a,b)=>a.localeCompare(b,"he"));
+}
+function togglePrio(name){
+  const set=new Set(S.cfg.priority||[]), k=norm(name);
+  set.has(k)?set.delete(k):set.add(k);
+  setCfg({priority:[...set]});
+}
+function prioCard(){
+  const c=S.cfg, names=knownNames(), set=new Set(c.priority||[]);
+  const att=attendance(), pct=new Map(att.map(a=>[norm(a.name),a]));
+  return h("div",{class:"card"},
+    h("h2",null,"🎟️ עדיפות לקבועים",h("span",{class:"count"},`${set.size} קבועים`)),
+    h("div",{class:"hint"},"הקבועים יכולים להירשם לפני כולם. הבדיקה היא לפי השם, אז הם צריכים להירשם בדיוק בשם שמופיע כאן."),
+    h("div",{class:"sub-h"},"כמה זמן לפני הפתיחה לכולם?"),
+    h("div",{class:"chips"},[0,1,2,3,6,12,24].map(x=>h("button",{class:"chip"+((c.prioHours||0)===x?" on":""),onclick:()=>setCfg({prioHours:x})},x?`${x} ש׳`:"בלי"))),
+    !c.openAt && (c.prioHours||0)>0 ? h("div",{class:"hint"},"⚠️ זה עובד יחד עם ״פתיחה אוטומטית״. בלי פתיחה אוטומטית, אפשר לפתוח לקבועים ידנית עם הכפתור 🎟️ למעלה.") : null,
+    h("div",{class:"sub-h"},"מי הקבועים? (לחץ לסימון)"),
+    names.length ? h("div",{class:"chips"},names.map(n=>{ const a=pct.get(norm(n));
+      return h("button",{class:"chip"+(set.has(norm(n))?" on":""),onclick:()=>togglePrio(n)},(set.has(norm(n))?"🎟️ ":"")+n+(a&&a.weeks>=2?` · ${a.pct}%`:"")); })) : h("div",{class:"hint"},"אין עדיין שחקנים."),
+    att.length ? h("button",{class:"linkbtn",onclick:()=>{ const top=att.filter(a=>a.weeks>=3&&a.pct>=75).map(a=>norm(a.name)); if(!top.length){ toast("אין עדיין מספיק נתוני נוכחות"); return; } setCfg({priority:[...new Set([...(c.priority||[]),...top])]},`סומנו ${top.length} שחקנים עם 75%+ נוכחות`); }},"✨ סמן אוטומטית את מי שמגיע 75%+ מהשבועות") : null);
+}
 const toLocalInput=ms=>{ const t=new Date(ms-new Date(ms).getTimezoneOffset()*60000); return t.toISOString().slice(0,16); };
 function viewSettings(){
   const c=S.cfg, k=c.numTeams, cap=c.capacity, per=[...new Set(sizesFor(cap,k))].sort((a,b)=>b-a).join(" / ");
@@ -1685,15 +1817,23 @@ function viewSettings(){
   return [
     h("div",{class:"card"},
       h("h2",null,"🔓 הרשמה"),
-      h("div",{class:"stepper"},
-        h("div",{class:"lbl"},h("b",null,open?"ההרשמה פתוחה":"ההרשמה סגורה"),h("small",null,future?`תיפתח אוטומטית ${fmtFull(c.openAt)}`:open?"שחקנים יכולים להירשם עכשיו":"אף אחד לא יכול להירשם")),
-        h("button",{class:"btn "+(open?"warn":""),onclick:()=>setCfg(open?{open:false,openAt:null}:{open:true,openAt:null})},open?"סגור הרשמה":"פתח עכשיו")),
+      (()=>{ const prio=isPrioOpen(), pa=prioAt();
+        const st = open ? "פתוחה לכולם" : prio ? "🎟️ פתוחה לקבועים בלבד" : "סגורה";
+        const sub = open ? "כולם יכולים להירשם עכשיו" : prio ? (future?`לכולם: ${fmtFull(c.openAt)}`:"רק מי שברשימת הקבועים יכול להירשם")
+          : future ? (pa&&pa>Date.now()?`לקבועים: ${fmtFull(pa)} · לכולם: ${fmtFull(c.openAt)}`:`תיפתח אוטומטית ${fmtFull(c.openAt)}`) : "אף אחד לא יכול להירשם";
+        return h("div",null,
+          h("div",{class:"regstate"},h("b",null,`ההרשמה ${st}`),h("small",null,sub)),
+          h("div",{class:"seg3"},
+            h("button",{class:"btn "+(!open&&!prio?"on":"ghost"),onclick:()=>setCfg({open:false,prioOpen:false,openAt:null})},"🔒 סגור"),
+            h("button",{class:"btn "+(prio?"on":"ghost"),onclick:()=>{ if(!(c.priority||[]).length){ toast("קודם בחר קבועים בכרטיס ״עדיפות לקבועים״"); return; } setCfg({open:false,prioOpen:true,openAt:null},"🎟️ פתוח לקבועים בלבד"); }},"🎟️ קבועים"),
+            h("button",{class:"btn "+(open?"on":"ghost"),onclick:()=>setCfg({open:true,prioOpen:false,openAt:null},"🔓 פתוח לכולם")},"🔓 כולם"))); })(),
       h("div",{class:"sub-h"},"⏰ פתיחה אוטומטית"),
       h("div",{class:"hint"},"ההרשמה תיפתח לבד בזמן שתבחר. כשלוחצים ״פתח רשימה חדשה״ היא מתוזמנת אוטומטית לאותה שעה בשבוע הבא."),
       h("div",{class:"addrow",style:"margin-top:8px"},
         h("input",{id:"f_openAt",type:"datetime-local",value:d.openAt ?? (future?toLocalInput(c.openAt):""),oninput:e=>{d.openAt=e.target.value;}}),
         h("button",{class:"btn",onclick:setAutoOpen},"קבע")),
       future ? h("button",{class:"linkbtn",onclick:()=>setCfg({openAt:null},"הפתיחה האוטומטית בוטלה")},"בטל פתיחה אוטומטית") : null),
+    prioCard(),
     h("div",{class:"card"},
       h("h2",null,"📍 פרטי המשחק"),
       h("div",{class:"hint"},"יופיעו לכולם בראש הדף, עם כפתור ניווט."),
