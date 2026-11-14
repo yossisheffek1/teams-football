@@ -972,10 +972,12 @@ async function enablePush(){
 function pushBox(){
   const st=S.pushState;
   if(st==="off"||st==="unsupported"||st==="unknown") return null;
-  if(st==="on") return h("div",{class:"pushon"},"🔔 התראות פעילות. נודיע לך אם תעלה מההמתנה");
-  if(st==="ios-browser") return h("div",{class:"pushask"},"🔔 רוצה התראה כשמתפנה לך מקום? באייפון צריך קודם להוסיף את האפליקציה למסך הבית ולפתוח אותה משם.");
+  if(st==="on") return h("div",{class:"pushon"},"🔔 התראות פעילות");
+  if(st==="ios-browser") return h("div",{class:"pushask"},"🔔 רוצה התראות כשההרשמה נפתחת, כשמתפנה מקום וכשהכוחות מתפרסמים? באייפון צריך קודם להוסיף את האפליקציה למסך הבית ולפתוח אותה משם.");
   if(st==="denied") return h("div",{class:"pushask"},"🔕 ההתראות חסומות. אפשר להפעיל אותן בהגדרות הדפדפן עבור האתר הזה.");
-  return h("button",{class:"btn ghost full pushbtn",onclick:enablePush},"🔔 הודיעו לי כשמתפנה לי מקום");
+  return h("div",null,
+    h("button",{class:"btn ghost full pushbtn",onclick:enablePush},"🔔 הפעל התראות"),
+    h("div",{class:"pushask",style:"margin-top:4px;text-align:center"},"נודיע לך כשההרשמה נפתחת, כשמתפנה לך מקום וכשהכוחות מתפרסמים"));
 }
 
 // ---------- install (home screen) ----------
@@ -1096,8 +1098,9 @@ function myCard(){
       return h("div",{class:"card countdown"},
         h("div",{class:"hint"},"🔒 ההרשמה תיפתח "+fmtFull(S.cfg.openAt)),
         h("div",{class:"cdbig",id:"cd"},fmtLeft(S.cfg.openAt-Date.now())),
-        h("div",{class:"hint"},"השאר את הדף פתוח, והכפתור יופיע ברגע שההרשמה תיפתח."));
-    return h("div",{class:"card"},h("div",{class:"empty"},"🔒 ההרשמה סגורה כרגע. היא תיפתח בקרוב."));
+        h("div",{class:"hint"},"השאר את הדף פתוח, והכפתור יופיע ברגע שההרשמה תיפתח."),
+        pushBox());
+    return h("div",{class:"card"},h("div",{class:"empty"},"🔒 ההרשמה סגורה כרגע. היא תיפתח בקרוב."),pushBox());
   }
   const full=S.signups.length>=cap;
   const inp=h("input",{id:"myName",type:"text",placeholder:"השם שלך",autocomplete:"name",enterkeyhint:"go",value:lsGet("myName"),
@@ -1107,7 +1110,8 @@ function myCard(){
     h("div",{class:"addrow"}, inp, h("button",{class:"btn",disabled:S.busy,onclick:()=>selfRegister(inp.value)}, S.busy?"…":"אני בא!")),
     h("input",{id:"myPhone",type:"tel",class:"phone-in",placeholder:"📱 טלפון (לא חובה, רק המארגן רואה)",autocomplete:"tel",inputmode:"tel",dir:"ltr",
       value:S.draft.myPhone ?? prettyPhone(lsGet("myPhone")), oninput:e=>{S.draft.myPhone=e.target.value;}}),
-    h("div",{class:"hint",style:"margin-top:8px"},"כל הקודם זוכה. אפשר לבטל מהטלפון הזה בכל זמן."));
+    h("div",{class:"hint",style:"margin-top:8px"},"כל הקודם זוכה. אפשר לבטל מהטלפון הזה בכל זמן."),
+    pushBox());
 }
 
 function guestBox(){
