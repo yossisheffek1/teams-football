@@ -312,6 +312,11 @@
   .tile-head{cursor:pointer}
   .tile-head .chev{margin-inline-start:auto;font-size:12px;color:var(--muted)}
   .tile-head .count + .chev{margin-inline-start:8px}
+  .tsub{font-size:13px;color:var(--muted);margin-top:2px}
+  .timer.out .tlabel{color:#7c3aed}
+  .timer.out .tfg{stroke:#7c3aed}
+  .tbtn.ballout{background:#dc2626;color:#fff}
+  .tbtn.outbtn{background:#ede9fe;color:#5b21b6}
 </style>
 </head>
 <body>
@@ -1171,7 +1176,9 @@ function pushBox(){
 
 // ---------- match timer ----------
 const TM = (()=>{ let t={}; try{ t=JSON.parse(localStorage.getItem("timer")||"{}"); }catch(e){} 
-  return {game:7, extra:2, phase:"idle", running:false, endAt:0, left:0, match:1, total:0, ...t}; })();
+  return {game:7, extra:1, cap:10, phase:"idle", running:false, endAt:0, left:0, match:1, total:0, used:0, ...t}; })();
+// time left until the overall cap ("play until the ball goes out, but no more than X minutes in total")
+const capLeft = () => TM.cap>0 ? Math.max(0, TM.cap*60000 - (TM.used||0)) : 0;
 function tmSave(){ lsSet("timer", JSON.stringify(TM)); }
 function tmLeft(){ return TM.running ? Math.max(0, TM.endAt-Date.now()) : TM.left; }
 let audioCtx=null, wakeLock=null, tmTick=null, lastBeep=-1;
@@ -1204,12 +1211,15 @@ async function keepAwake(on){
   }catch(e){}
 }
 document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="visible"){ if(TM.running) keepAwake(true); tmCheck(); render(); } });
-function tmStart(phase){
+function tmStart(phase, quiet){
   unlockAudio();
-  const mins = phase==="extra" ? TM.extra : TM.game;
-  Object.assign(TM,{phase, running:true, endAt:Date.now()+mins*60000, left:mins*60000, total:mins*60000});
-  lastBeep=-1; tmSave(); keepAwake(true); whistle(false); tmLoop(); render();
+  if(phase==="game") TM.used=0;
+  const ms = phase==="out" ? capLeft() : (phase==="extra" ? TM.extra : TM.game)*60000;
+  if(ms<=0){ tmFinish(); return; }
+  Object.assign(TM,{phase, running:true, endAt:Date.now()+ms, left:ms, total:ms});
+  lastBeep=-1; tmSave(); keepAwake(true); if(!quiet) whistle(false); tmLoop(); render();
 }
+function tmBank(){ TM.used=(TM.used||0)+Math.max(0,(TM.total||0)-tmLeft()); }
 function tmPause(){ unlockAudio(); if(!TM.running) return; TM.left=tmLeft(); TM.running=false; tmSave(); keepAwake(false); render(); }
 function tmResume(){ unlockAudio(); if(TM.running||TM.left<=0) return; TM.endAt=Date.now()+TM.left; TM.running=true; tmSave(); keepAwake(true); tmLoop(); render(); }
 function tmAdjust(ms){
@@ -1218,13 +1228,19 @@ function tmAdjust(ms){
   TM.total=Math.max(TM.total, tmLeft()); tmSave(); tmPaint();
 }
 function tmEndPhase(){
-  TM.running=false; TM.left=0;
+  tmBank(); TM.running=false; TM.left=0;
+  if(TM.phase==="extra" && capLeft()>0){
+    // extra time is over but the ball may still be in play: keep going until it goes out, up to the cap
+    whistle(false); setTimeout(()=>whistle(false),450);
+    tmStart("out", true); toast("⚽ ממשיכים עד שהכדור יוצא"); return;
+  }
   TM.phase = TM.phase==="game" ? "gameover" : "over";
   tmSave(); keepAwake(false); whistle(true); render();
 }
-function tmFinish(){ TM.running=false; TM.left=0; TM.phase="over"; tmSave(); keepAwake(false); render(); }
+function tmFinish(){ if(TM.running||TM.left) tmBank(); TM.running=false; TM.left=0; TM.phase="over"; tmSave(); keepAwake(false); render(); }
+function tmBallOut(){ unlockAudio(); tmBank(); TM.running=false; TM.left=0; TM.phase="over"; tmSave(); keepAwake(false); whistle(true); render(); }
 function tmNext(){ TM.match=(TM.match||1)+1; TM.phase="idle"; TM.running=false; TM.left=0; tmSave(); render(); }
-function tmResetAll(){ Object.assign(TM,{phase:"idle",running:false,left:0,endAt:0,match:1,total:0}); tmSave(); keepAwake(false); render(); }
+function tmResetAll(){ Object.assign(TM,{phase:"idle",running:false,left:0,endAt:0,match:1,total:0,used:0}); tmSave(); keepAwake(false); render(); }
 function tmCheck(){
   if(!TM.running) return;
   const left=tmLeft();
@@ -1282,12 +1298,13 @@ function winPick(){
 }
 function viewTimer(){
   const out=[], left=tmLeft(), ph=TM.phase, running=TM.running;
-  const label = ph==="extra" ? "⏱️ הארכה" : ph==="gameover" ? "⏰ הזמן נגמר!" : ph==="over" ? "🏁 המשחקון הסתיים" : `⚽ משחקון ${TM.match||1}`;
+  const label = ph==="extra" ? "⏱️ הארכה" : ph==="out" ? "⚽ עד שהכדור יוצא" : ph==="gameover" ? "⏰ הזמן נגמר!" : ph==="over" ? "🏁 המשחקון הסתיים" : `⚽ משחקון ${TM.match||1}`;
   const showLeft = ph==="idle" ? TM.game*60000 : left;
   const total = ph==="idle" ? TM.game*60000 : (TM.total||1);
   const p = total ? showLeft/total : 1;
-  out.push(h("div",{class:"card timer"+(ph==="gameover"||ph==="over"?" ended":"")+(ph==="extra"?" extra":"")},
+  out.push(h("div",{class:"card timer"+(ph==="gameover"||ph==="over"?" ended":"")+(ph==="extra"?" extra":"")+(ph==="out"?" out":"")},
     h("div",{class:"tlabel"},label),
+    ph==="out" ? h("div",{class:"tsub"},`עד ${TM.cap} דק׳ בסך הכל · נשאר עד הסוף:`) : null,
     h("div",{class:"tclock"},
       (()=>{ const ns="http://www.w3.org/2000/svg", svg=document.createElementNS(ns,"svg"); svg.setAttribute("viewBox","0 0 240 240"); svg.setAttribute("class","tsvg");
         const bg=document.createElementNS(ns,"circle"); bg.setAttribute("cx","120"); bg.setAttribute("cy","120"); bg.setAttribute("r","110"); bg.setAttribute("class","tbg");
@@ -1302,9 +1319,13 @@ function viewTimer(){
       running ? h("button",{class:"btn big tmain",onclick:tmPause},"⏸ עצור") : h("button",{class:"btn big tmain",onclick:tmResume},"▶️ המשך"),
       h("button",{class:"btn ghost",onclick:()=>tmAdjust(60000)},"+1 דק׳")) : null,
     (ph==="game"||ph==="extra") ? h("button",{class:"linkbtn",onclick:tmFinish},"⏹ סיים את המשחקון עכשיו") : null,
+    ph==="out" ? h("div",{class:"tctl col"},
+      h("button",{class:"btn full big tbtn ballout",onclick:tmBallOut},"🛑 הכדור יצא, סיום"),
+      running ? h("button",{class:"btn ghost full",onclick:tmPause},"⏸ עצור שעון") : h("button",{class:"btn ghost full",onclick:tmResume},"▶️ המשך")) : null,
     ph==="gameover" ? h("div",{class:"tctl col"},
       TM.extra>0 ? h("button",{class:"btn full big tbtn extra",onclick:()=>tmStart("extra")},`⏱️ הארכה (${TM.extra} דק׳)`) : null,
-      h("button",{class:"btn ghost full",onclick:tmFinish},"✔ בלי הארכה, סיים")) : null,
+      TM.cap>0 && capLeft()>0 ? h("button",{class:"btn full tbtn outbtn",onclick:()=>tmStart("out")},`⚽ עד שהכדור יוצא (עוד ${fmtClock(capLeft())} מקס׳)`) : null,
+      h("button",{class:"btn ghost full",onclick:tmFinish},"✔ סיים")) : null,
     ph==="over" ? h("button",{class:"btn full big tbtn",onclick:tmNext},"▶️ משחקון הבא") : null));
   out.push(winPick());
   // settings
@@ -1318,7 +1339,10 @@ function viewTimer(){
     h("h2",null,"⚙️ זמנים"),
     step("דקות למשחקון","game",1,60),
     step("דקות הארכה (0 = בלי)","extra",0,15),
-    h("div",{class:"chips"},[[5,1],[7,2],[8,2],[10,3]].map(([g,e])=>h("button",{class:"chip"+(TM.game===g&&TM.extra===e?" on":""),onclick:()=>{ TM.game=g; TM.extra=e; tmSave(); render(); }},`${g}+${e}`))),
+    step("מקסימום כולל, עד שהכדור יוצא (0 = בלי)","cap",0,60),
+    TM.cap>0 && TM.cap<=TM.game+TM.extra ? h("div",{class:"hint",style:"color:#b45309"},`⚠️ המקסימום צריך להיות גדול מ-${TM.game+TM.extra} דק׳ (משחק + הארכה), אחרת השלב הזה לא יופעל.`) : null,
+    h("div",{class:"chips"},[[7,1,10],[7,2,10],[8,1,10],[5,1,8],[10,2,13]].map(([g,e,c])=>h("button",{class:"chip"+(TM.game===g&&TM.extra===e&&TM.cap===c?" on":""),onclick:()=>{ TM.game=g; TM.extra=e; TM.cap=c; tmSave(); render(); }},`${g}+${e} עד ${c}`))),
+    h("div",{class:"hint",style:"margin-top:6px"},"איך זה עובד: משחק ⬅ הארכה ⬅ אם הכדור עדיין במשחק, ממשיכים עד שהוא יוצא, אבל לא יותר מהמקסימום הכולל. כשהכדור יוצא לוחצים ״הכדור יצא״."),
     h("div",{class:"hint",style:"margin-top:8px"},"🔊 בסוף כל משחקון תהיה שריקה ורטט, והמסך יישאר דלוק כל עוד הטיימר רץ. שים את הטלפון על צלצול, לא על שקט."),
     TM.match>1||ph!=="idle" ? h("button",{class:"linkbtn",onclick:tmResetAll},"↺ אפס טיימר ומספור משחקונים") : null));
   return out;
