@@ -1447,7 +1447,7 @@ async function submitVote(){
   if(ok){ S.myVote={round:sv.round, r}; S.surveyOpenUI=false; render(); }
 }
 function surveyText(){ return `⭐ סקר דירוגים אנונימי לכדורגל!\nדרגו את השחקנים מ-1 עד ${RATING_MAX}. אף אחד לא רואה מה כל אחד דירג, רק ממוצע.\n${pageUrl()}#survey`; }
-const surveyKnown = () => !!(lsGet("phoneSaved") || mySignup() || S.myVote);
+const surveyKnown = () => !!((lsGet("phoneSaved") && lsGet("phoneNamed")) || mySignup());
 async function surveyJoin(){
   const name=clean(S.draft.survMe ?? lsGet("myName")), ph=normPhone(S.draft.survPh ?? lsGet("myPhone"));
   if(!name){ toast("כתוב את השם שלך"); return; }

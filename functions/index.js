@@ -405,12 +405,23 @@ async function aggregateSurvey() {
   const who = [];
   for (const d of snap.docs) {
     const [p, su] = await Promise.all([db.doc(`phones/${d.id}`).get(), db.doc(`signups/${d.id}`).get()]);
-    who.push((p.exists && p.data().name) || (su.exists && su.data().name) || "לא ידוע");
+    let name = (p.exists && p.data().name) || (su.exists && su.data().name) || "";
+    if (!name) {
+      const q = await db.collection("signups").where("uid", "==", d.id).get();
+      const own = q.docs.find((x) => !x.data().guestOf);
+      if (own) name = own.data().name || "";
+    }
+    who.push(name || "לא ידוע");
   }
   who.sort((x, y) => x.localeCompare(y, "he"));
   await db.doc("survey/results").set({ round, avg, voters: snap.size, who, at: Date.now() });
 }
 exports.onSurveyVote = onDocumentWritten("surveyVotes/{id}", aggregateSurvey);
+// a voter who adds his name later: refresh the "who answered" list
+exports.onPhoneForSurvey = onDocumentWritten("phones/{id}", async (event) => {
+  const v = await db.doc(`surveyVotes/${event.params.id}`).get();
+  if (v.exists) await aggregateSurvey();
+});
 
 exports.onSurveyChange = onDocumentWritten("survey/current", async (event) => {
   const b = (event.data.before && event.data.before.exists && event.data.before.data()) || {};
