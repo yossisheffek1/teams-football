@@ -341,6 +341,22 @@
   .nums{display:flex;gap:5px;direction:ltr}
   .num-b{flex:1;height:36px;border-radius:10px;background:var(--chip);font-weight:700;color:var(--muted)}
   .num-b.on{background:#f0b429;color:#1a1300}
+  .logrow{border-top:1px solid var(--line)}
+  .loghead{width:100%;display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 0;background:none;text-align:right}
+  .logt{display:flex;flex-direction:column;min-width:0}
+  .logt b{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .logt small{color:var(--muted);font-size:12px}
+  .logc{display:flex;gap:6px;flex-shrink:0;direction:ltr}
+  .tk{font-size:12px;font-weight:700;padding:2px 6px;border-radius:8px;background:var(--chip);white-space:nowrap}
+  .tk2{color:#53bdeb}
+  .tk1{color:var(--muted)}
+  .tk0{color:var(--wait)}
+  .tkx{color:var(--danger)}
+  .logbody{padding:0 0 10px}
+  .logp{display:flex;align-items:center;gap:8px;padding:5px 0}
+  .logp .pn{flex:1}
+  .logp small{color:var(--muted);font-size:12px}
+  .loglegend{display:flex;gap:12px;flex-wrap:wrap;font-size:13px;color:var(--muted);margin:4px 0}
 </style>
 </head>
 <body>
@@ -366,7 +382,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/fireba
 import { getAuth, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-functions.js";
 import { getMessaging, getToken, onMessage, isSupported } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging.js";
-import { getFirestore, doc, collection, onSnapshot, setDoc, addDoc, deleteDoc, getDoc, updateDoc, serverTimestamp, query, orderBy, writeBatch, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { getFirestore, doc, collection, onSnapshot, setDoc, addDoc, deleteDoc, getDoc, updateDoc, serverTimestamp, query, orderBy, limit, writeBatch, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 // Web Push key from Firebase → Project settings → Cloud Messaging → Web Push certificates
 const VAPID_KEY = "BNFSlqmhear_HYeATMw44vdejYX5RTfxeVCk7DfbQvQqi3ccgjsMd4R2AvQrMT5ZqE_JeNSWzQgNpjLt8nmosnE";
@@ -530,6 +546,7 @@ async function checkAdmin(user){
     // only the owner may read ratings; a successful read tells us this is the owner
     try{ await getDoc(ratRef); S.isOwner=true; }catch(e){ S.isOwner=false; }
     if(S.isOwner){
+      onSnapshot(query(collection(db,"pushLog"),orderBy("at","desc"),limit(25)), q=>{ S.pushLog=q.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>b.at-a.at); render(); }, e=>console.warn("pushLog",e));
       onSnapshot(collection(db,"tokens"), q=>{ S.tokens=q.docs.filter(d=>d.data().token).map(d=>({uid:d.id, name:d.data().name||"", at:d.data().at})); render(); }, ()=>{});
       onSnapshot(surveyResRef, s=>{ S.surveyResults = s.exists()?s.data():null; render(); }, ()=>{});
       ratUnsub = onSnapshot(ratRef, s=>{ const d=s.exists()?s.data():{}; S.ratings=d.list||[];
@@ -1550,6 +1567,52 @@ function pushPeopleCard(){
       h("div",{class:"hint",style:"margin-top:6px"},"אפשר לבקש מהם ללחוץ ״🔔 הפעל התראות״ בטאב רשימה. באייפון צריך קודם להוסיף את האתר למסך הבית.")) : null);
 }
 
+// ---------- notification log with ✓ / ✓✓ (owner) ----------
+const ERR_HE = {"registration-token-not-registered":"ההתראות כבויות או שהאפליקציה נמחקה","invalid-registration-token":"מכשיר לא תקין","third-party-auth-error":"שגיאה בשירות של אפל/גוגל","internal-error":"שגיאה זמנית","unavailable":"שגיאה זמנית"};
+function logStatus(l){
+  const acks=l.acks||{};
+  return (l.items||[]).map(it=>({...it, st: acks[it.k]?2 : it.ok===true?1 : it.ok===null?0 : -1, ackAt:acks[it.k]}));
+}
+function tick(st){
+  if(st===2) return h("span",{class:"tk tk2"},"✓✓");
+  if(st===1) return h("span",{class:"tk tk1"},"✓");
+  if(st===0) return h("span",{class:"tk tk0"},"🕓");
+  return h("span",{class:"tk tkx"},"✖");
+}
+function pushLogCard(){
+  const logs=S.pushLog||[];
+  return h("div",{class:"card"},
+    h("h2",null,"📨 יומן התראות"),
+    h("div",{class:"loglegend"},
+      h("div",null,tick(1)," נשלחה לטלפון"),
+      h("div",null,tick(2)," הגיעה לטלפון"),
+      h("div",null,tick(-1)," לא נשלחה")),
+    h("div",{class:"hint"},"לחץ על התראה כדי לראות מי."),
+    !logs.length ? h("div",{class:"hint",style:"margin-top:8px"},"עוד לא נשלחו התראות מאז העדכון.") : null,
+    logs.map(l=>{
+      const st=logStatus(l), c=[2,1,0,-1].map(x=>st.filter(i=>i.st===x).length), open=S.logOpen===l.id;
+      const un=l.unmatched||[];
+      return h("div",{class:"logrow"},
+        h("button",{class:"loghead",onclick:()=>{ S.logOpen=open?null:l.id; render(); }},
+          h("div",{class:"logt"},h("b",null,l.title||"התראה"),h("small",null,fmtFull(l.at))),
+          h("div",{class:"logc"},
+            c[0]?h("span",{class:"tk tk2"},`✓✓ ${c[0]}`):null,
+            c[1]?h("span",{class:"tk tk1"},`✓ ${c[1]}`):null,
+            c[2]?h("span",{class:"tk tk0"},`🕓 ${c[2]}`):null,
+            c[3]?h("span",{class:"tk tkx"},`✖ ${c[3]}`):null,
+            un.length?h("span",{class:"tk tkx"},`❓ ${un.length}`):null)),
+        open ? h("div",{class:"logbody"},
+          l.body ? h("div",{class:"hint"},l.body) : null,
+          st.slice().sort((a,b)=>a.st-b.st || String(a.name).localeCompare(String(b.name),"he")).map(i=>h("div",{class:"logp"},
+            tick(i.st), h("span",{class:"pn"},i.name),
+            h("small",null, i.st===2?`הגיעה ${new Date(i.ackAt).toTimeString().slice(0,5)}` : i.st===1?"נשלחה, הטלפון עוד לא אישר" : i.st===0?"בשליחה…" : (ERR_HE[i.ok]||"לא נשלחה")))),
+          un.length ? h("div",null,
+            h("div",{class:"sub-h"},`❓ קבועים שלא זוהו (${un.length})`),
+            h("div",{class:"hint"},"לא נמצא להם מכשיר עם התראות. אולי לא פתחו את האפליקציה מאז העדכון, או שהשם אצלם כתוב אחרת."),
+            h("div",{class:"chips"},un.map(n=>h("span",{class:"chip"},n)))) : null) : null);
+    }));
+}
+
 // ---------- render ----------
 function render(){
   const cap=S.cfg.capacity, n=S.signups.length, inN=Math.min(n,cap), wN=Math.max(0,n-cap), open=isOpen();
@@ -2270,6 +2333,7 @@ function settingsSummary(title){
   if(title.includes("מנהלים")) return `${(S.admins.emails||[]).length+1} מנהלים`;
   if(title.includes("אנשי קשר")) return `${contactsList().length} טלפונים`;
   if(title.includes("פרטי המשחק")) { const g=game(); return [g.day,g.time].filter(Boolean).join(" ")||"לא הוגדר"; }
+  if(title.includes("יומן")) { const l=(S.pushLog||[])[0]; return l?`אחרונה ${fmtTime(l.at)}`:"אין עדיין"; }
   if(title.includes("מי מקבל")) return S.tokens?`${pushPeople().on.length} מכשירים`:"…";
   if(title.includes("התראות")) return ({all:"לכולם",admin:"רק אני",select:"נבחרים"})[c.pushMode||"all"];
   if(title.includes("ביטולים")) return ((c.lockHours||0)?`חסימה ${c.lockHours} ש׳`:"בלי חסימה")+(c.allowGuests===false?" · בלי אורחים":"");
@@ -2375,6 +2439,7 @@ function settingsCards(){
     S.isOwner ? adminsCard() : null,
     S.isOwner ? surveyAdminCard() : null,
     S.isOwner ? pushPeopleCard() : null,
+    S.isOwner ? pushLogCard() : null,
     apartCard(),
     h("div",{class:"card"},
       h("h2",null,"📍 פרטי המשחק"),

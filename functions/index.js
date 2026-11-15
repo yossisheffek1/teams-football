@@ -1,7 +1,7 @@
 // Push notifications for the weekly football app.
 const { onDocumentWritten, onDocumentUpdated } = require("firebase-functions/v2/firestore");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
-const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onCall, onRequest, HttpsError } = require("firebase-functions/v2/https");
 const { setGlobalOptions } = require("firebase-functions/v2");
 const { initializeApp } = require("firebase-admin/app");
 const { getFirestore } = require("firebase-admin/firestore");
@@ -73,15 +73,40 @@ async function applyMode(msgs) {
   return chosen.concat(out);
 }
 
+// names for a set of player ids (for the delivery log)
+async function namesFor() {
+  const [t, p, s] = await Promise.all([db.collection("tokens").get(), db.collection("phones").get(), db.collection("signups").get()]);
+  const m = new Map();
+  s.docs.forEach((d) => { const x = d.data(); if (x.uid && !x.guestOf && x.name && d.id === x.uid) m.set(x.uid, x.name); });
+  p.docs.forEach((d) => { if (d.data().name) m.set(d.id, d.data().name); });
+  t.docs.forEach((d) => { if (d.data().name) m.set(d.id, d.data().name); });
+  return m;
+}
+
 // msgs: [{token, ref, title, body, link}]
-async function sendAll(msgs) {
+// Every send is logged in pushLog/{id}: who it was sent to and whether Google accepted it (✓).
+// The phone's service worker reports back when it arrives (✓✓) via pushAck.
+async function sendAll(msgs, extra = {}) {
   msgs = await applyMode(msgs);
   const seen = new Set();
   msgs = msgs.filter((m) => !seen.has(m.token) && seen.add(m.token));
+  if (!msgs.length && !(extra.unmatched || []).length) return;
+  const logRef = db.collection("pushLog").doc();
+  const names = await namesFor().catch(() => new Map());
+  const first = msgs[0] || {};
+  const items = msgs.map((m, i) => {
+    const it = { k: "k" + i, name: m.uid === "admin" ? "אתה (מנהל)" : (names.get(m.uid) || "לא ידוע"), ok: null };
+    if (m.title !== first.title) it.t = m.title;
+    return it;
+  });
+  await logRef.set({ title: first.title || extra.title || "", body: first.body || "", at: Date.now(), items, acks: {}, unmatched: extra.unmatched || [] });
+  msgs.forEach((m, i) => { m.k = "k" + i; });
+  const results = {};
   for (let i = 0; i < msgs.length; i += 500) {
     const chunk = msgs.slice(i, i + 500);
     const res = await getMessaging().sendEach(chunk.map((m) => ({
       token: m.token,
+      data: { lid: logRef.id, k: m.k },
       notification: { title: m.title, body: m.body },
       webpush: {
         notification: { icon: APP_URL + "icon-192.png", badge: APP_URL + "icon-192.png" },
@@ -89,6 +114,7 @@ async function sendAll(msgs) {
       },
     })));
     await Promise.all(res.responses.map(async (r, j) => {
+      results[chunk[j].k] = r.success ? true : String((r.error && r.error.code) || "error").replace("messaging/", "");
       if (!r.success) {
         const code = String((r.error && r.error.code) || "");
         console.error("send failed", chunk[j].uid, code);
@@ -98,6 +124,10 @@ async function sendAll(msgs) {
       }
     }));
   }
+  await logRef.update({ items: items.map((it) => ({ ...it, ok: results[it.k] === true ? true : (results[it.k] || false) })) });
+  // keep a month of logs
+  const old = await db.collection("pushLog").where("at", "<", Date.now() - 30 * 86400000).limit(50).get().catch(() => null);
+  if (old) await Promise.all(old.docs.map((d) => d.ref.delete()));
 }
 
 function gameLine(cfg) {
@@ -182,7 +212,7 @@ async function prioTokens(cfg) {
   psnap.docs.forEach((d) => { if (d.data().name) nameOf.set(d.id, d.data().name); });
   return tsnap.docs.filter((d) => d.data().token)
     .filter((d) => prio.has(norm(d.data().name || nameOf.get(d.id) || "")))
-    .map((d) => ({ uid: d.id, token: d.data().token, ref: d.ref }));
+    .map((d) => ({ uid: d.id, token: d.data().token, ref: d.ref, name: d.data().name || nameOf.get(d.id) || "" }));
 }
 async function announcePrio(cfg, key) {
   const ref = db.doc("state/notify");
@@ -196,9 +226,12 @@ async function announcePrio(cfg, key) {
   const line = gameLine(cfg);
   const toks = await prioTokens(cfg);
   console.log("prio push to", toks.length);
+  const got = new Set(toks.map((t) => norm(t.name)));
+  const unmatched = (cfg.priority || []).filter((n) => !got.has(norm(n)));
   await sendAll(toks.map((t) => ({ ...t,
     title: "🎟️ ההרשמה נפתחה לקבועים!",
-    body: "אתה ברשימת הקבועים, אפשר להירשם עכשיו לפני כולם" + (line ? ` · ${line}` : "") })));
+    body: "אתה ברשימת הקבועים, אפשר להירשם עכשיו לפני כולם" + (line ? ` · ${line}` : "") })),
+    { unmatched, title: "🎟️ ההרשמה נפתחה לקבועים!" });
 }
 
 exports.onConfigChange = onDocumentUpdated("config/main", async (event) => {
@@ -469,4 +502,19 @@ exports.onSurveyChange = onDocumentWritten("survey/current", async (event) => {
       body: "דרגו את השחקנים כדי שהכוחות יהיו מאוזנים. אף אחד לא רואה מה דירגתם.",
       link: APP_URL + "#survey" })));
   }
+});
+
+// ---------- delivery receipts (✓✓) ----------
+// Called by the phone's service worker when a notification arrives.
+exports.pushAck = onRequest({ cors: true, invoker: "public" }, async (req, res) => {
+  const lid = String(req.query.l || ""), k = String(req.query.k || "");
+  if (!/^[A-Za-z0-9]{10,40}$/.test(lid) || !/^k\d{1,4}$/.test(k)) { res.status(400).send("bad"); return; }
+  try {
+    const ref = db.doc(`pushLog/${lid}`);
+    const d = await ref.get();
+    if (d.exists && (d.data().items || []).some((x) => x.k === k) && !(d.data().acks || {})[k]) {
+      await ref.update({ [`acks.${k}`]: Date.now() });
+    }
+  } catch (e) { console.warn("ack", e); }
+  res.status(204).send("");
 });
