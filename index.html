@@ -1406,6 +1406,24 @@ async function openSurvey(names){
   S.survey=sv; S.surveySel=null; render();
   await run(()=>setDoc(surveyRef,sv),"⭐ הסקר נפתח");
 }
+async function addSurveyName(){
+  const n=clean(S.draft.survName||""); if(!n){ toast("כתוב שם"); return; }
+  delete S.draft.survName;
+  if(surveyOpen()){
+    const names=S.survey.names||[];
+    if(names.some(x=>norm(x)===norm(n))){ toast("כבר בסקר"); render(); return; }
+    S.survey={...S.survey, names:names.concat([n])}; render();
+    await run(()=>updateDoc(surveyRef,{names:S.survey.names}),`נוסף לסקר: ${n}`);
+  } else {
+    S.surveyExtra=(S.surveyExtra||[]); if(!S.surveyExtra.some(x=>norm(x)===norm(n))) S.surveyExtra.push(n);
+    S.surveySel=S.surveySel||new Set(); S.surveySel.add(n); render();
+  }
+}
+function surveyAddRow(){
+  return h("div",{class:"addrow",style:"margin-top:10px"},
+    h("input",{id:"f_survName",type:"text",placeholder:"הוסף שם ידנית",autocomplete:"off",value:S.draft.survName??"",oninput:e=>{S.draft.survName=e.target.value;},onkeydown:e=>{ if(e.key==="Enter") addSurveyName(); }}),
+    h("button",{class:"btn",onclick:addSurveyName},"הוסף"));
+}
 async function closeSurvey(){ await run(()=>updateDoc(surveyRef,{open:false, closedAt:Date.now()}),"הסקר נסגר"); }
 function applySurveyAverages(){
   const res=S.surveyResults; if(!res || res.round!==(S.survey&&S.survey.round)){ toast("אין עדיין תוצאות"); return; }
@@ -1451,7 +1469,7 @@ function surveyAdminCard(){
   const sv=S.survey, res=S.surveyResults, open=surveyOpen();
   const fresh=res && sv && res.round===sv.round;
   if(!open && !(sv && fresh)){
-    const names=knownNames(), sel=S.surveySel || (S.surveySel=new Set(S.signups.slice(0,S.cfg.capacity).map(s=>s.name)));
+    const kn=knownNames(), names=kn.concat((S.surveyExtra||[]).filter(x=>!kn.some(k=>norm(k)===norm(x)))), sel=S.surveySel || (S.surveySel=new Set(S.signups.slice(0,S.cfg.capacity).map(s=>s.name)));
     return h("div",{class:"card"},
       h("h2",null,"⭐ סקר דירוגים"),
       h("div",{class:"hint"},"השחקנים מדרגים אחד את השני באנונימיות, ואתה רואה רק ממוצע לכל שחקן. בחר את מי לדרג:"),
@@ -1459,6 +1477,7 @@ function surveyAdminCard(){
         h("button",{class:"linkbtn",onclick:()=>{ S.surveySel=new Set(names); render(); }},"בחר הכל"),
         h("button",{class:"linkbtn muted",onclick:()=>{ S.surveySel=new Set(); render(); }},"נקה")),
       h("div",{class:"chips"},names.map(n=>h("button",{class:"chip"+(sel.has(n)?" on":""),onclick:()=>{ sel.has(n)?sel.delete(n):sel.add(n); render(); }},n))),
+      surveyAddRow(),
       h("button",{class:"btn full",style:"margin-top:10px",onclick:()=>openSurvey([...sel])},`⭐ פתח סקר (${sel.size} שחקנים)`));
   }
   const avg=(fresh&&res.avg)||{};
@@ -1473,6 +1492,7 @@ function surveyAdminCard(){
       h("b",{style:"min-width:36px;text-align:center"},x.a&&x.a.n?(Math.round(x.a.a*10)/10).toFixed(1):"–"),
       h("span",{class:"ps",style:"min-width:30px;text-align:center"},`(${ratingOf(x.n)})`)))),
     h("div",{class:"hint",style:"margin-top:4px"},"בסוגריים: הדירוג הנוכחי שלך."),
+    open ? surveyAddRow() : null,
     h("button",{class:"btn full",style:"margin-top:10px",onclick:applySurveyAverages},"✔ החל ממוצעים על הדירוגים"),
     open ? h("button",{class:"btn ghost full",style:"margin-top:8px",onclick:closeSurvey},"סגור סקר") :
       h("button",{class:"linkbtn",onclick:()=>{ S.survey={...sv, round:0}; S.surveySel=null; render(); }},"פתח סקר חדש"));
