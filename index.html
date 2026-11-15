@@ -2019,7 +2019,10 @@ function apartCard(){
 function knownNames(){
   const m=new Map();
   const add=n=>{ if(n && !m.has(norm(n))) m.set(norm(n),n); };
-  S.ratings.forEach(r=>add(r.n)); S.signups.forEach(s=>add(s.name)); S.weeks.forEach(w=>(w.players||[]).forEach(add));
+  S.ratings.forEach(r=>add(r.n)); S.signups.forEach(s=>add(s.name)); S.weeks.forEach(w=>(w.players||[]).concat(w.waiting||[]).forEach(add));
+  S.history.forEach(g=>(g.teams||[]).forEach(t=>(t.players||[]).concat(t.subs||[]).forEach(add)));
+  Object.values(S.phoneNames||{}).forEach(add); S.lates.forEach(x=>add(x.n));
+  (S.cfg.priority||[]).forEach(p=>{ if(!m.has(p)) add(p); });
   return [...m.values()].sort((a,b)=>a.localeCompare(b,"he"));
 }
 function togglePrio(name){
@@ -2146,6 +2149,9 @@ function prioCard(){
     h("div",{class:"chips"},[0,1,2,3,6,12,24].map(x=>h("button",{class:"chip"+((c.prioHours||0)===x?" on":""),onclick:()=>setCfg({prioHours:x})},x?`${x} ש׳`:"בלי"))),
     !c.openAt && (c.prioHours||0)>0 ? h("div",{class:"hint"},"⚠️ זה עובד יחד עם ״פתיחה אוטומטית״. בלי פתיחה אוטומטית, אפשר לפתוח לקבועים ידנית עם הכפתור 🎟️ למעלה.") : null,
     h("div",{class:"sub-h"},"מי הקבועים? (לחץ לסימון)"),
+    h("div",{class:"addrow",style:"margin-bottom:8px"},
+      h("input",{id:"f_prioName",type:"text",placeholder:"שם שלא מופיע ברשימה",autocomplete:"off",value:S.draft.prioName??"",oninput:e=>{S.draft.prioName=e.target.value;}}),
+      h("button",{class:"btn",onclick:()=>{ const n=clean(S.draft.prioName||""); if(!n){ toast("כתוב שם"); return; } delete S.draft.prioName; if(!set.has(norm(n))) togglePrio(n); else toast("כבר קבוע"); }},"הוסף")),
     names.length ? h("div",{class:"chips"},names.map(n=>{ const a=pct.get(norm(n));
       return h("button",{class:"chip"+(set.has(norm(n))?" on":""),onclick:()=>togglePrio(n)},(set.has(norm(n))?"🎟️ ":"")+n+(a&&a.weeks>=2?` · ${a.pct}%`:"")); })) : h("div",{class:"hint"},"אין עדיין שחקנים."),
     att.length ? h("button",{class:"linkbtn",onclick:()=>{ const top=att.filter(a=>a.weeks>=3&&a.pct>=75).map(a=>norm(a.name)); if(!top.length){ toast("אין עדיין מספיק נתוני נוכחות"); return; } setCfg({priority:[...new Set([...(c.priority||[]),...top])]},`סומנו ${top.length} שחקנים עם 75%+ נוכחות`); }},"✨ סמן אוטומטית את מי שמגיע 75%+ מהשבועות") : null);
