@@ -530,6 +530,7 @@ async function checkAdmin(user){
     // only the owner may read ratings; a successful read tells us this is the owner
     try{ await getDoc(ratRef); S.isOwner=true; }catch(e){ S.isOwner=false; }
     if(S.isOwner){
+      onSnapshot(collection(db,"tokens"), q=>{ S.tokens=q.docs.filter(d=>d.data().token).map(d=>({uid:d.id, name:d.data().name||"", at:d.data().at})); render(); }, ()=>{});
       onSnapshot(surveyResRef, s=>{ S.surveyResults = s.exists()?s.data():null; render(); }, ()=>{});
       ratUnsub = onSnapshot(ratRef, s=>{ const d=s.exists()?s.data():{}; S.ratings=d.list||[];
         // one-time move of "not together" pairs to the organizers' shared doc
@@ -1526,6 +1527,29 @@ function surveyAdminCard(){
       h("button",{class:"linkbtn",onclick:()=>{ S.survey={...sv, round:0}; S.surveySel=null; render(); }},"פתח סקר חדש"));
 }
 
+// ---------- who has notifications on (owner) ----------
+function pushPeople(){
+  const toks=S.tokens||[], byUid=new Set(toks.map(t=>t.uid));
+  const nameOf=uid=>{ const t=toks.find(x=>x.uid===uid); const s=S.signups.find(x=>x.uid===uid && x.id===uid);
+    return (t&&t.name) || (S.phoneNames||{})[uid] || (s&&s.name) || ""; };
+  const on=toks.map(t=>({uid:t.uid, name:nameOf(t.uid)})).sort((a,b)=>(a.name||"תתת").localeCompare(b.name||"תתת","he"));
+  const off=S.signups.filter(s=>s.uid && s.id===s.uid && !byUid.has(s.uid)).map(s=>s.name);
+  return {on, off};
+}
+function pushPeopleCard(){
+  const {on, off}=pushPeople(), named=on.filter(x=>x.name), anon=on.length-named.length;
+  return h("div",{class:"card"},
+    h("h2",null,"📲 מי מקבל התראות",h("span",{class:"count"},`${on.length}`)),
+    h("div",{class:"hint"},"מכשירים שהפעילו התראות באפליקציה. שם מופיע אחרי שהשחקן נרשם או שמר טלפון."),
+    h("div",{class:"sub-h"},`🔔 פעילות (${on.length})`),
+    named.length ? h("div",{class:"chips"},named.map(x=>h("span",{class:"chip on"},x.name))) : h("div",{class:"hint"},"עוד אף אחד"),
+    anon ? h("div",{class:"hint",style:"margin-top:6px"},`+ ${anon} מכשירים בלי שם (לא נרשמו עדיין)`) : null,
+    off.length ? h("div",null,
+      h("div",{class:"sub-h"},`🔕 רשומים השבוע בלי התראות (${off.length})`),
+      h("div",{class:"chips"},off.map(n=>h("span",{class:"chip"},n))),
+      h("div",{class:"hint",style:"margin-top:6px"},"אפשר לבקש מהם ללחוץ ״🔔 הפעל התראות״ בטאב רשימה. באייפון צריך קודם להוסיף את האתר למסך הבית.")) : null);
+}
+
 // ---------- render ----------
 function render(){
   const cap=S.cfg.capacity, n=S.signups.length, inN=Math.min(n,cap), wN=Math.max(0,n-cap), open=isOpen();
@@ -2246,6 +2270,7 @@ function settingsSummary(title){
   if(title.includes("מנהלים")) return `${(S.admins.emails||[]).length+1} מנהלים`;
   if(title.includes("אנשי קשר")) return `${contactsList().length} טלפונים`;
   if(title.includes("פרטי המשחק")) { const g=game(); return [g.day,g.time].filter(Boolean).join(" ")||"לא הוגדר"; }
+  if(title.includes("מי מקבל")) return S.tokens?`${pushPeople().on.length} מכשירים`:"…";
   if(title.includes("התראות")) return ({all:"לכולם",admin:"רק אני",select:"נבחרים"})[c.pushMode||"all"];
   if(title.includes("ביטולים")) return ((c.lockHours||0)?`חסימה ${c.lockHours} ש׳`:"בלי חסימה")+(c.allowGuests===false?" · בלי אורחים":"");
   if(title.includes("הגדרות המשחק")) return `${c.capacity} שחקנים · ${c.numTeams} קבוצות`;
@@ -2349,6 +2374,7 @@ function settingsCards(){
     prioCard(),
     S.isOwner ? adminsCard() : null,
     S.isOwner ? surveyAdminCard() : null,
+    S.isOwner ? pushPeopleCard() : null,
     apartCard(),
     h("div",{class:"card"},
       h("h2",null,"📍 פרטי המשחק"),
