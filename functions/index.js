@@ -172,16 +172,51 @@ async function announceOpen(cfg, key) {
     body: `${cfg.capacity || 18} מקומות, כל הקודם זוכה` + (line ? ` · ${line}` : "") })));
 }
 
+// tokens of the regulars only (matched by the name the player gave on his phone)
+async function prioTokens(cfg) {
+  const prio = new Set((cfg.priority || []).map(norm));
+  if (!prio.size) return [];
+  const [tsnap, psnap, signups] = await Promise.all([db.collection("tokens").get(), db.collection("phones").get(), getSignups()]);
+  const nameOf = new Map();
+  signups.forEach((s) => { if (s.uid && !s.guestOf && s.name) nameOf.set(s.uid, s.name); });
+  psnap.docs.forEach((d) => { if (d.data().name) nameOf.set(d.id, d.data().name); });
+  return tsnap.docs.filter((d) => d.data().token)
+    .filter((d) => prio.has(norm(d.data().name || nameOf.get(d.id) || "")))
+    .map((d) => ({ uid: d.id, token: d.data().token, ref: d.ref }));
+}
+async function announcePrio(cfg, key) {
+  const ref = db.doc("state/notify");
+  const fresh = await db.runTransaction(async (tx) => {
+    const st = await tx.get(ref);
+    if (st.exists && st.data().prioKey === key) return false;
+    tx.set(ref, { prioKey: key, prioAt: Date.now() }, { merge: true });
+    return true;
+  });
+  if (!fresh) return;
+  const line = gameLine(cfg);
+  const toks = await prioTokens(cfg);
+  console.log("prio push to", toks.length);
+  await sendAll(toks.map((t) => ({ ...t,
+    title: "🎟️ ההרשמה נפתחה לקבועים!",
+    body: "אתה ברשימת הקבועים, אפשר להירשם עכשיו לפני כולם" + (line ? ` · ${line}` : "") })));
+}
+
 exports.onConfigChange = onDocumentUpdated("config/main", async (event) => {
   const before = event.data.before.data() || {}, after = event.data.after.data() || {};
   if ((before.capacity || 18) !== (after.capacity || 18)) await syncWaitlist();
   // opened by hand
   if (!before.open && after.open) await announceOpen(after, "manual:" + Date.now());
+  // opened for regulars only, by hand
+  if (!after.open && !before.prioOpen && after.prioOpen) await announcePrio(after, "manual:" + Date.now());
 });
 
 // auto-open at the scheduled time (checked every minute)
 exports.checkAutoOpen = onSchedule({ schedule: "every 1 minutes", timeZone: "Asia/Jerusalem" }, async () => {
   const cfg = await getConfig();
+  const ph = Number(cfg.prioHours) || 0;
+  if (cfg.openAt && ph > 0 && !cfg.open && Date.now() >= cfg.openAt - ph * 3600000 && Date.now() < cfg.openAt) {
+    await announcePrio(cfg, "auto:" + cfg.openAt);
+  }
   if (cfg.openAt && Date.now() >= cfg.openAt && Date.now() - cfg.openAt < 6 * 3600 * 1000) {
     await announceOpen(cfg, "auto:" + cfg.openAt);
   }

@@ -614,6 +614,7 @@ async function selfRegister(name){
   await run(()=>setDoc(doc(db,"signups",S.uid), {name, ts:serverTimestamp(), uid:S.uid}));
   const ph=normPhone(S.draft.myPhone ?? lsGet("myPhone"));
   if(ph){ lsSet("myPhone",ph); savePhone(ph); }
+  if(messaging && S.pushState==="on") refreshToken(false);
   S.busy=false; render();
   const me=mySignup();
   if(me){ const i=S.signups.indexOf(me); toast(i<S.cfg.capacity ? `נרשמת! מקום ${i+1} ⚽` : `הרשימה מלאה, אתה מקום ${i-S.cfg.capacity+1} בהמתנה`); }
@@ -1168,7 +1169,8 @@ async function refreshToken(interactive){
     const reg=await navigator.serviceWorker.register("firebase-messaging-sw.js",{scope:"./"});
     const token=await getToken(messaging,{vapidKey:VAPID_KEY, serviceWorkerRegistration:reg});
     if(!token) throw new Error("no token");
-    if(S.uid && token!==lsGet("pushToken:"+S.uid)){ await setDoc(doc(db,"tokens",S.uid),{token, at:serverTimestamp()}); lsSet("pushToken:"+S.uid, token); }
+    const nm=clean(lsGet("myName"));
+    if(S.uid && (token!==lsGet("pushToken:"+S.uid) || nm!==lsGet("pushName:"+S.uid))){ await setDoc(doc(db,"tokens",S.uid),nm?{token, name:nm, at:serverTimestamp()}:{token, at:serverTimestamp()}); lsSet("pushToken:"+S.uid, token); lsSet("pushName:"+S.uid, nm); }
     lsSet("pushOn","1"); S.pushState="on"; S.myToken=token; render();
     if(S.isAdmin) registerAdminDevice();
     if(interactive) toast("🔔 התראות הופעלו!");
@@ -1455,7 +1457,7 @@ async function surveyJoin(){
   if(!S.uid){ toast("רגע, מתחבר…"); return; }
   lsSet("myName",name); lsSet("myPhone",ph);
   const ok=await run(()=>setDoc(doc(db,"phones",S.uid),{phone:ph, name}));
-  if(ok){ lsSet("phoneSaved",ph); lsSet("phoneNamed",name); delete S.draft.survMe; delete S.draft.survPh; S.survGate=false; toast(`✔ נשמר: ${name}`); render(); }
+  if(ok){ lsSet("phoneSaved",ph); lsSet("phoneNamed",name); delete S.draft.survMe; delete S.draft.survPh; S.survGate=false; toast(`✔ נשמר: ${name}`); render(); if(messaging && S.pushState==="on") refreshToken(false); }
 }
 function surveyCard(){
   const sv=S.survey; if(!sv||!sv.open) return null;
