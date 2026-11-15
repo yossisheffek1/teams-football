@@ -1455,14 +1455,14 @@ async function surveyJoin(){
   if(!S.uid){ toast("רגע, מתחבר…"); return; }
   lsSet("myName",name); lsSet("myPhone",ph);
   const ok=await run(()=>setDoc(doc(db,"phones",S.uid),{phone:ph, name}));
-  if(ok){ lsSet("phoneSaved",ph); lsSet("phoneNamed",name); delete S.draft.survMe; delete S.draft.survPh; render(); }
+  if(ok){ lsSet("phoneSaved",ph); lsSet("phoneNamed",name); delete S.draft.survMe; delete S.draft.survPh; S.survGate=false; toast(`✔ נשמר: ${name}`); render(); }
 }
 function surveyCard(){
   const sv=S.survey; if(!sv||!sv.open) return null;
   const voted=S.myVote && S.myVote.round===sv.round;
   if(!S.surveyOpenUI) return h("button",{class:"card votecall survcall",onclick:()=>{ S.surveyOpenUI=true; S.voteDraft = voted ? {...S.myVote.r} : (S.voteDraft||{}); render(); }},
     h("b",null,"⭐ סקר דירוגים אנונימי"), h("span",null, voted?"✔ דירגת · לחץ כדי לעדכן":"עזור לאזן את הכוחות: דרג את השחקנים"));
-  if(!surveyKnown()) return h("div",{class:"card surv"},
+  if(!surveyKnown() || S.survGate) return h("div",{class:"card surv"},
     h("h2",null,"⭐ סקר דירוגים"),
     h("div",{class:"hint"},"פעם ראשונה כאן? כתוב שם וטלפון ותוכל לדרג. הפרטים נשמרים בנפרד מהדירוג, כך שהדירוג נשאר אנונימי."),
     h("input",{id:"f_survMe",type:"text",class:"phone-in",placeholder:"השם שלך (כמו בקבוצה)",autocomplete:"name",value:S.draft.survMe ?? lsGet("myName") ?? "",oninput:e=>{S.draft.survMe=e.target.value;}}),
@@ -1474,6 +1474,7 @@ function surveyCard(){
   const names=(sv.names||[]).filter(n=>norm(n)!==me);
   return h("div",{class:"card surv"},
     h("h2",null,"⭐ סקר דירוגים",h("span",{class:"count"},`${Object.keys(d).filter(k=>d[k]).length}/${names.length}`)),
+    h("div",{class:"hint"},"מדרג בתור: ",h("b",null,lsGet("myName")||"לא ידוע")," · ",h("button",{class:"linkbtn",onclick:()=>{ S.survGate=true; render(); }},"שנה")),
     h("div",{class:"hint"},`1 = חלש, ${sv.max} = חזק מאוד. אם אתה לא מכיר מישהו, דלג עליו. הדירוג אנונימי: אף אחד לא רואה מה דירגת, רק ממוצע של כולם.`),
     names.map(n=>{ const k=norm(n), v=d[k]||0;
       return h("div",{class:"survrow"},
