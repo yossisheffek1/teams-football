@@ -87,7 +87,9 @@ async function namesFor() {
 // Every send is logged in pushLog/{id}: who it was sent to and whether Google accepted it (✓).
 // The phone's service worker reports back when it arrives (✓✓) via pushAck.
 async function sendAll(msgs, extra = {}) {
-  msgs = await applyMode(msgs);
+  return deliver(await applyMode(msgs), extra);
+}
+async function deliver(msgs, extra = {}) {
   const seen = new Set();
   msgs = msgs.filter((m) => !seen.has(m.token) && seen.add(m.token));
   if (!msgs.length && !(extra.unmatched || []).length) return;
@@ -443,10 +445,7 @@ exports.testPush = onCall(async (req) => {
   const msgs = mine.concat(others).map((t) => ({ ...t, title: "🧪 בדיקת התראות", body: "אם אתה רואה את זה, ההתראות עובדות ✅" }));
   // bypass the notification mode: this is an explicit test
   const seen = new Set(), list = msgs.filter((m) => !seen.has(m.token) && seen.add(m.token));
-  if (list.length) {
-    await getMessaging().sendEach(list.map((m) => ({ token: m.token, notification: { title: m.title, body: m.body },
-      webpush: { notification: { icon: APP_URL + "icon-192.png" }, fcmOptions: { link: APP_URL } } })));
-  }
+  if (list.length) await deliver(list);   // logged in the notification log like any other
   return { sent: list.length };
 });
 
