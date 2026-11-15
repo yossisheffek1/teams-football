@@ -1504,6 +1504,13 @@ function surveyAdminCard(){
     h("h2",null,"⭐ סקר דירוגים",h("span",{class:"count"},`${(fresh&&res.voters)||0} הצביעו`)),
     open ? h("div",{class:"hint"},"הסקר פתוח. התוצאות מתעדכנות כל פעם שמישהו מדרג.") : h("div",{class:"hint"},"הסקר סגור."),
     open ? h("div",null,h("div",{class:"hint",style:"margin-top:6px"},"שלח לקבוצה:"),shareRow(surveyText())) : null,
+    (()=>{ const who=(fresh&&res.who)||[], ws=new Set(who.map(norm));
+      const not=(sv.names||[]).filter(n=>!ws.has(norm(n)));
+      return h("div",null,
+        h("div",{class:"sub-h"},`✔ ענו (${who.length})`),
+        who.length ? h("div",{class:"chips"},who.map(n=>h("span",{class:"chip on"},n))) : h("div",{class:"hint"},"עוד אף אחד"),
+        open && not.length ? h("div",null,h("div",{class:"sub-h"},`⏳ עוד לא ענו (${not.length})`),h("div",{class:"chips"},not.map(n=>h("span",{class:"chip"},n)))) : null,
+        h("div",{class:"hint"},"רואים רק מי ענה, לא מה הוא דירג.")); })(),
     h("div",{class:"paylist"},rows.map(x=>h("div",{class:"payrow"},
       h("span",{class:"pn"},x.n),
       h("span",{class:"ps"},x.a&&x.a.n?`${x.a.n} מדרגים`:"אין עדיין"),

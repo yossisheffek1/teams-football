@@ -401,7 +401,14 @@ async function aggregateSurvey() {
   });
   const avg = {};
   for (const [k, { s, n }] of Object.entries(sum)) avg[k] = { a: Math.round((s / n) * 100) / 100, n };
-  await db.doc("survey/results").set({ round, avg, voters: snap.size, at: Date.now() });
+  // names of who answered (not what they answered), for the organizer
+  const who = [];
+  for (const d of snap.docs) {
+    const [p, su] = await Promise.all([db.doc(`phones/${d.id}`).get(), db.doc(`signups/${d.id}`).get()]);
+    who.push((p.exists && p.data().name) || (su.exists && su.data().name) || "לא ידוע");
+  }
+  who.sort((x, y) => x.localeCompare(y, "he"));
+  await db.doc("survey/results").set({ round, avg, voters: snap.size, who, at: Date.now() });
 }
 exports.onSurveyVote = onDocumentWritten("surveyVotes/{id}", aggregateSurvey);
 
