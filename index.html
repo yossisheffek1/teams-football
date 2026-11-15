@@ -1616,6 +1616,32 @@ function pushLogCard(){
     }));
 }
 
+// ---------- "who are you?" so regulars get their notifications ----------
+function whoNeeded(){
+  if(S.isAdmin || !S.cfgLoaded || lsGet("whoDone")) return false;
+  const pr=(S.cfg.priority||[]); if(!pr.length) return false;
+  const me=norm(lsGet("myName"));
+  return !pr.some(n=>norm(n)===me);
+}
+function whoPick(name){
+  lsSet("whoDone","1");
+  if(name){ lsSet("myName",name); const ph=lsGet("myPhone"); if(ph) savePhone(ph); if(messaging && S.pushState==="on") refreshToken(false); toast(`✔ שלום ${name}!`); }
+  S.whoOpen=false; render();
+}
+function whoCard(){
+  if(!whoNeeded()) return null;
+  const hidden=new Set((S.cfg.hiddenNames||[]).map(norm));
+  const names=(S.cfg.priority||[]).filter(n=>!hidden.has(norm(n))).slice().sort((a,b)=>a.localeCompare(b,"he"));
+  const q=norm(S.draft.whoQ||""), shown=q?names.filter(n=>norm(n).includes(q)):names;
+  return h("div",{class:"card surv"},
+    h("h2",null,"👋 מי אתה?"),
+    h("div",{class:"hint"},"בחר את השם שלך כדי שהאפליקציה תזהה אותך ותקבל התראות (למשל כשההרשמה נפתחת לקבועים)."),
+    names.length>12 ? h("input",{id:"f_whoQ",type:"text",class:"phone-in",placeholder:"🔍 חפש את השם שלך",value:S.draft.whoQ||"",oninput:e=>{ S.draft.whoQ=e.target.value; render(); const el=document.getElementById("f_whoQ"); if(el){ el.focus(); el.setSelectionRange(el.value.length,el.value.length); } }}) : null,
+    h("div",{class:"chips",style:"margin-top:10px"},shown.map(n=>h("button",{class:"chip",onclick:()=>whoPick(n)},n))),
+    h("div",{class:"winlinks",style:"justify-content:flex-start;margin-top:8px"},
+      h("button",{class:"linkbtn muted",onclick:()=>whoPick(null)},"אני לא ברשימה")));
+}
+
 // ---------- render ----------
 function render(){
   const cap=S.cfg.capacity, n=S.signups.length, inN=Math.min(n,cap), wN=Math.max(0,n-cap), open=isOpen();
@@ -1830,6 +1856,7 @@ function viewList(){
   const cap=S.cfg.capacity, out=[];
   if(S.error) out.push(h("div",{class:"note"},S.error));
   out.push(...promoCards());
+  out.push(whoCard());
   out.push(surveyCard());
   if(S.teams && S.teams.status==="voting" && !S.isAdmin)
     out.push(h("button",{class:"card votecall",onclick:()=>{S.tab="teams";render();}},
