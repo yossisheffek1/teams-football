@@ -40,11 +40,23 @@ async function allTokens() {
 }
 
 // When the organizer turned player notifications off, send one copy of each notification to his devices only.
+// push tokens of one organizer's own devices (by Google email)
+async function deviceTokens(email) {
+  email = String(email || "").toLowerCase();
+  if (!email) return [];
+  const p = await db.doc("admin/push").get();
+  const devs = (p.exists && p.data().devices) || [];
+  return [...new Set(devs.filter((d) => d && d.token && String(d.email || "").toLowerCase() === email).map((d) => d.token))];
+}
+async function ownerEmail() {
+  const o = await db.doc("owner/admins").get();
+  return o.exists ? String(o.data().owner || "").toLowerCase() : "";
+}
+
 async function applyMode(msgs) {
   const cfg = await getConfig();
   if (cfg.pushMode !== "admin" && cfg.pushMode !== "select") return msgs;
-  const p = await db.doc("admin/push").get();
-  const toks = (p.exists && p.data().tokens) || [];
+  const toks = await deviceTokens(await ownerEmail());   // "only me" = the main organizer's phones only
   let chosen = [];
   if (cfg.pushMode === "select") {
     const t = await db.doc("admin/pushTest").get();
@@ -357,8 +369,8 @@ async function isOrganizer(req) {
 exports.testPush = onCall(async (req) => {
   if (!(await isOrganizer(req))) throw new HttpsError("permission-denied", "not an organizer");
   const uids = Array.isArray(req.data && req.data.uids) ? req.data.uids.slice(0, 50) : [];
-  const p = await db.doc("admin/push").get();
-  const mine = ((p.exists && p.data().tokens) || []).map((t) => ({ uid: "admin", token: t, ref: { delete: async () => {} } }));
+  const caller = req.auth.token.email;
+  const mine = (await deviceTokens(caller)).map((t) => ({ uid: "admin", token: t, ref: { delete: async () => {} } }));
   const others = await tokensFor(uids);
   const msgs = mine.concat(others).map((t) => ({ ...t, title: "🧪 בדיקת התראות", body: "אם אתה רואה את זה, ההתראות עובדות ✅" }));
   // bypass the notification mode: this is an explicit test
