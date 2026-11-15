@@ -473,33 +473,33 @@ exports.testPush = onCall(async (req) => {
 async function aggregateSurvey() {
   const sv = await db.doc("survey/current").get();
   if (!sv.exists) return;
-  const { round, names = [], max = 7 } = sv.data();
+  const { round, names = [], max = 7, alias = {} } = sv.data();
   const keys = new Set(names.map(norm));
   const snap = await db.collection("surveyVotes").where("round", "==", round).get();
-  const sum = {};
-  snap.docs.forEach((d) => {
-    const r = d.data().r || {};
-    for (const [k, v] of Object.entries(r)) {
-      const n = Number(v);
-      if (!keys.has(k) || !(n >= 1 && n <= max)) continue;
-      (sum[k] = sum[k] || { s: 0, n: 0 }).s += n; sum[k].n++;
-    }
-  });
-  const avg = {};
-  for (const [k, { s, n }] of Object.entries(sum)) avg[k] = { a: Math.round((s / n) * 100) / 100, n };
-  // names of who answered (not what they answered), for the organizer
-  const who = [];
+  // who each voter is (name as he wrote it, mapped by the organizer's aliases to a survey name)
+  const voterName = {};
   for (const d of snap.docs) {
-    const [p, su] = await Promise.all([db.doc(`phones/${d.id}`).get(), db.doc(`signups/${d.id}`).get()]);
-    let name = (p.exists && p.data().name) || (su.exists && su.data().name) || "";
+    const [p, su, t] = await Promise.all([db.doc(`phones/${d.id}`).get(), db.doc(`signups/${d.id}`).get(), db.doc(`tokens/${d.id}`).get()]);
+    let name = (p.exists && p.data().name) || (su.exists && su.data().name) || (t.exists && t.data().name) || "";
     if (!name) {
       const q = await db.collection("signups").where("uid", "==", d.id).get();
       const own = q.docs.find((x) => !x.data().guestOf);
       if (own) name = own.data().name || "";
     }
-    who.push(name || "לא ידוע");
+    voterName[d.id] = alias[norm(name)] || name || "לא ידוע";
   }
-  who.sort((x, y) => x.localeCompare(y, "he"));
+  const sum = {};
+  snap.docs.forEach((d) => {
+    const r = d.data().r || {}, self = norm(voterName[d.id]);
+    for (const [k, v] of Object.entries(r)) {
+      const n = Number(v);
+      if (!keys.has(k) || k === self || !(n >= 1 && n <= max)) continue;   // nobody rates himself
+      (sum[k] = sum[k] || { s: 0, n: 0 }).s += n; sum[k].n++;
+    }
+  });
+  const avg = {};
+  for (const [k, { s, n }] of Object.entries(sum)) avg[k] = { a: Math.round((s / n) * 100) / 100, n };
+  const who = Object.values(voterName).sort((x, y) => x.localeCompare(y, "he"));
   await db.doc("survey/results").set({ round, avg, voters: snap.size, who, at: Date.now() });
 }
 exports.onSurveyVote = onDocumentWritten("surveyVotes/{id}", aggregateSurvey);
@@ -512,6 +512,7 @@ exports.onPhoneForSurvey = onDocumentWritten("phones/{id}", async (event) => {
 exports.onSurveyChange = onDocumentWritten("survey/current", async (event) => {
   const b = (event.data.before && event.data.before.exists && event.data.before.data()) || {};
   const a = (event.data.after && event.data.after.exists && event.data.after.data()) || {};
+  if (a.round === b.round && JSON.stringify(a.alias || {}) !== JSON.stringify(b.alias || {})) await aggregateSurvey();
   if (a.open && (!b.open || b.round !== a.round)) {
     await db.doc("survey/results").set({ round: a.round, avg: {}, voters: 0, at: Date.now() });
     const toks = await allTokens();
