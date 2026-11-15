@@ -549,6 +549,7 @@ async function checkAdmin(user){
     // only the owner may read ratings; a successful read tells us this is the owner
     try{ await getDoc(ratRef); S.isOwner=true; }catch(e){ S.isOwner=false; }
     if(S.isOwner){
+      lsSet("ownerDevice","1");   // this device belongs to the main admin: show him the account switcher
       onSnapshot(query(collection(db,"pushLog"),orderBy("at","desc"),limit(25)), q=>{ S.pushLog=q.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>b.at-a.at); render(); }, e=>console.warn("pushLog",e));
       onSnapshot(collection(db,"tokens"), q=>{ S.tokens=q.docs.filter(d=>d.data().token).map(d=>({uid:d.id, name:d.data().name||"", at:d.data().at})); render(); }, ()=>{});
       onSnapshot(surveyResRef, s=>{ S.surveyResults = s.exists()?s.data():null; render(); }, ()=>{});
@@ -1711,14 +1712,22 @@ function render(){
   if($("cd")) startCountdown();
 }
 
+async function organizerLogin(pick){
+  const p=new GoogleAuthProvider();
+  if(pick) p.setCustomParameters({prompt:"select_account"});   // let Google show the account chooser
+  try{ await signInWithPopup(auth,p); }
+  catch(e){ if(e.code!=="auth/popup-closed-by-user" && e.code!=="auth/cancelled-popup-request") toast("ההתחברות נכשלה. נסה לפתוח את הקישור בדפדפן (Safari/Chrome)"); }
+}
 function footer(){
+  // only on the main admin's own device(s): choose which Google account to enter with
+  const ownerDev = !!lsGet("ownerDevice");
   return h("div",{class:"foot"},
     S.isAdmin
       ? h("button",{class:"linkbtn",onclick:async()=>{ await signOut(auth); }},"🔓 יציאה ממצב מארגן")
-      : h("button",{class:"linkbtn muted",onclick:async()=>{
-          try{ await signInWithPopup(auth,new GoogleAuthProvider()); }
-          catch(e){ if(e.code!=="auth/popup-closed-by-user" && e.code!=="auth/cancelled-popup-request") toast("ההתחברות נכשלה. נסה לפתוח את הקישור בדפדפן (Safari/Chrome)"); }
-        }},"כניסת מארגן"));
+      : h("button",{class:"linkbtn muted",onclick:()=>organizerLogin(ownerDev)},"כניסת מארגן"),
+    ownerDev && S.isAdmin
+      ? h("button",{class:"linkbtn muted",style:"display:block;margin:0 auto",onclick:()=>organizerLogin(true)},"🔄 החלף חשבון")
+      : null);
 }
 
 function navRow(){
