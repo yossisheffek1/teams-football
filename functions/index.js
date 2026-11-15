@@ -48,6 +48,23 @@ async function deviceTokens(email) {
   const devs = (p.exists && p.data().devices) || [];
   return [...new Set(devs.filter((d) => d && d.token && String(d.email || "").toLowerCase() === email).map((d) => d.token))];
 }
+// an organizer device as a send target; a dead token is removed from admin/push
+function adminTarget(token, devs) {
+  const d = (devs || []).find((x) => x.token === token) || {};
+  return { token, uid: "admin", dev: d.dev || "", ref: { delete: () => removeAdminToken(token) } };
+}
+async function adminDevs() {
+  const p = await db.doc("admin/push").get();
+  return (p.exists && p.data().devices) || [];
+}
+async function removeAdminToken(token) {
+  const ref = db.doc("admin/push");
+  await db.runTransaction(async (tx) => {
+    const p = await tx.get(ref);
+    const devs = (p.exists && p.data().devices) || [];
+    if (devs.some((d) => d.token === token)) tx.set(ref, { devices: devs.filter((d) => d.token !== token) }, { merge: true });
+  }).catch((e) => console.warn("remove admin token", e));
+}
 async function ownerEmail() {
   const o = await db.doc("owner/admins").get();
   return o.exists ? String(o.data().owner || "").toLowerCase() : "";
@@ -57,6 +74,7 @@ async function applyMode(msgs) {
   const cfg = await getConfig();
   if (cfg.pushMode !== "admin" && cfg.pushMode !== "select") return msgs;
   const toks = await deviceTokens(await ownerEmail());   // "only me" = the main organizer's phones only
+  const devs = await adminDevs();
   let chosen = [];
   if (cfg.pushMode === "select") {
     const t = await db.doc("admin/pushTest").get();
@@ -68,7 +86,7 @@ async function applyMode(msgs) {
   const out = [];
   for (const { m, n } of byTitle.values()) for (const t of toks) {
     const note = n > 1 ? `(רק אצלך · היה נשלח ל-${n}, למשל: ${m.body})` : `(רק אצלך) ${m.body}`;
-    out.push({ ...m, token: t, uid: "admin", ref: { delete: async () => {} }, title: "🔕 " + m.title, body: note });
+    out.push({ ...m, ...adminTarget(t, devs), title: "🔕 " + m.title, body: note });
   }
   return chosen.concat(out);
 }
@@ -97,7 +115,7 @@ async function deliver(msgs, extra = {}) {
   const names = await namesFor().catch(() => new Map());
   const first = msgs[0] || {};
   const items = msgs.map((m, i) => {
-    const it = { k: "k" + i, name: m.uid === "admin" ? "אתה (מנהל)" : (names.get(m.uid) || "לא ידוע"), ok: null };
+    const it = { k: "k" + i, name: m.uid === "admin" ? `אתה (${m.dev || "מנהל"})` : (names.get(m.uid) || "לא ידוע"), ok: null };
     if (m.title !== first.title) it.t = m.title;
     return it;
   });
@@ -440,7 +458,8 @@ exports.testPush = onCall(async (req) => {
   if (!(await isOrganizer(req))) throw new HttpsError("permission-denied", "not an organizer");
   const uids = Array.isArray(req.data && req.data.uids) ? req.data.uids.slice(0, 50) : [];
   const caller = req.auth.token.email;
-  const mine = (await deviceTokens(caller)).map((t) => ({ uid: "admin", token: t, ref: { delete: async () => {} } }));
+  const devs = await adminDevs();
+  const mine = (await deviceTokens(caller)).map((t) => adminTarget(t, devs));
   const others = await tokensFor(uids);
   const msgs = mine.concat(others).map((t) => ({ ...t, title: "🧪 בדיקת התראות", body: "אם אתה רואה את זה, ההתראות עובדות ✅" }));
   // bypass the notification mode: this is an explicit test

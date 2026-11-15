@@ -1197,14 +1197,17 @@ async function refreshToken(interactive){
 // the organizer's devices: they keep getting notifications when player notifications are off
 async function registerAdminDevice(){
   if(!S.isAdmin || !S.myToken) return;
+  if(lsGet("adminDevSaved")===S.myToken+"|2"){ S.adminPushOk=true; return; }
   const email=String((auth.currentUser&&auth.currentUser.email)||"").toLowerCase();
   if(!email) return;
   try{
     // each organizer's devices are kept with his email, so "only me" reaches only the owner's own phones
     const ref=doc(db,"admin","push"), cur=await getDoc(ref);
     const devices=((cur.exists()&&cur.data().devices)||[]).filter(d=>d && d.token && d.token!==S.myToken);
-    devices.push({token:S.myToken, email, at:Date.now()});
+    const ua=navigator.userAgent, dev=/iPhone/.test(ua)?"אייפון":/iPad/.test(ua)?"אייפד":/Android/.test(ua)?"אנדרואיד":/Macintosh/.test(ua)?"מק":/Windows/.test(ua)?"מחשב":"מכשיר";
+    devices.push({token:S.myToken, email, dev, at:Date.now()});
     await setDoc(ref,{devices:devices.slice(-10)});
+    lsSet("adminDevSaved",S.myToken+"|2");
     S.adminPushOk=true; render();
   }catch(e){ console.warn("admin push",e); }
 }
