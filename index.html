@@ -332,6 +332,7 @@
   .tabs button.on{background:#21262d;color:var(--ink)}
   .seg button.on{background:#21262d}
   a{color:var(--accent)}
+  .chip.rm{background:#3a1a1a;color:#fca5a5}
 </style>
 </head>
 <body>
@@ -376,7 +377,7 @@ const S = {
   tab: location.hash==="#teams" ? "teams" : location.hash==="#stats" ? "stats" : "list",
   showPaste:false, confirmReset:false, confirmCancel:false, copyText:null, busy:false,
   subSel:new Set(), showColors:false, showImg:null, showText:null,
-  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false, showGuest:false, confirmGuest:false, editHist:null, histDraft:null, editPhone:null, colorPick:null, swapSel:null, myToken:null, adminPushOk:false, lastWin:null, winBusy:false, playersView:"rate", prioBanner:null, payForm:false, confirmPayCancel:false, busyTeams:false, pushTest:{uids:[],names:[]}, testing:false, showContacts:false, phoneNames:{}, setOpen:null, confirmDel:null, confirmResetHist:false
+  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false, showGuest:false, confirmGuest:false, editHist:null, histDraft:null, editPhone:null, colorPick:null, swapSel:null, myToken:null, adminPushOk:false, lastWin:null, winBusy:false, playersView:"rate", prioBanner:null, payForm:false, confirmPayCancel:false, busyTeams:false, pushTest:{uids:[],names:[]}, testing:false, showContacts:false, phoneNames:{}, setOpen:null, prioEdit:false, confirmDel:null, confirmResetHist:false
 };
 try{ S.promoted = JSON.parse(localStorage.getItem("promoted")||"[]"); }catch(e){}
 let dismissedSug=new Set(); try{ dismissedSug=new Set(JSON.parse(localStorage.getItem("dismissedSug")||"[]")); }catch(e){}
@@ -2023,7 +2024,14 @@ function knownNames(){
   S.history.forEach(g=>(g.teams||[]).forEach(t=>(t.players||[]).concat(t.subs||[]).forEach(add)));
   Object.values(S.phoneNames||{}).forEach(add); S.lates.forEach(x=>add(x.n));
   (S.cfg.priority||[]).forEach(p=>{ if(!m.has(p)) add(p); });
+  const hidden=new Set(S.cfg.hiddenNames||[]);
+  [...m.keys()].forEach(k=>{ if(hidden.has(k)) m.delete(k); });
   return [...m.values()].sort((a,b)=>a.localeCompare(b,"he"));
+}
+function hideName(name){
+  const k=norm(name), hid=new Set(S.cfg.hiddenNames||[]); hid.add(k);
+  const pr=(S.cfg.priority||[]).filter(x=>x!==k);
+  setCfg({hiddenNames:[...hid], priority:pr}, `${name} הוסר מהרשימה`);
 }
 function togglePrio(name){
   const set=new Set(S.cfg.priority||[]), k=norm(name);
@@ -2152,8 +2160,14 @@ function prioCard(){
     h("div",{class:"addrow",style:"margin-bottom:8px"},
       h("input",{id:"f_prioName",type:"text",placeholder:"שם שלא מופיע ברשימה",autocomplete:"off",value:S.draft.prioName??"",oninput:e=>{S.draft.prioName=e.target.value;}}),
       h("button",{class:"btn",onclick:()=>{ const n=clean(S.draft.prioName||""); if(!n){ toast("כתוב שם"); return; } delete S.draft.prioName; if(!set.has(norm(n))) togglePrio(n); else toast("כבר קבוע"); }},"הוסף")),
+    h("div",{class:"winlinks",style:"justify-content:flex-start;margin-bottom:4px"},
+      h("button",{class:"linkbtn",onclick:()=>{S.prioEdit=!S.prioEdit;render();}},S.prioEdit?"✔ סיום עריכה":"✏️ הסר שמות מהרשימה")),
     names.length ? h("div",{class:"chips"},names.map(n=>{ const a=pct.get(norm(n));
+      if(S.prioEdit) return h("button",{class:"chip rm",onclick:()=>hideName(n)},"✕ "+n);
       return h("button",{class:"chip"+(set.has(norm(n))?" on":""),onclick:()=>togglePrio(n)},(set.has(norm(n))?"🎟️ ":"")+n+(a&&a.weeks>=2?` · ${a.pct}%`:"")); })) : h("div",{class:"hint"},"אין עדיין שחקנים."),
+    S.prioEdit && (c.hiddenNames||[]).length ? h("div",null,
+      h("div",{class:"sub-h"},"מוסתרים (לחץ להחזיר)"),
+      h("div",{class:"chips"},(c.hiddenNames||[]).map(k=>h("button",{class:"chip",onclick:()=>setCfg({hiddenNames:(c.hiddenNames||[]).filter(x=>x!==k)},"השם הוחזר")},"↩ "+k)))) : null,
     att.length ? h("button",{class:"linkbtn",onclick:()=>{ const top=att.filter(a=>a.weeks>=3&&a.pct>=75).map(a=>norm(a.name)); if(!top.length){ toast("אין עדיין מספיק נתוני נוכחות"); return; } setCfg({priority:[...new Set([...(c.priority||[]),...top])]},`סומנו ${top.length} שחקנים עם 75%+ נוכחות`); }},"✨ סמן אוטומטית את מי שמגיע 75%+ מהשבועות") : null);
 }
 const toLocalInput=ms=>{ const t=new Date(ms-new Date(ms).getTimezoneOffset()*60000); return t.toISOString().slice(0,16); };
