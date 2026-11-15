@@ -333,6 +333,14 @@
   .seg button.on{background:#21262d}
   a{color:var(--accent)}
   .chip.rm{background:#3a1a1a;color:#fca5a5}
+  .survcall{background:#1d1a0e;border-color:#6b5a1f}
+  .survcall span{color:#f0c36b}
+  .surv{border:2px solid #6b5a1f}
+  .survrow{padding:8px 0;border-top:1px solid var(--line)}
+  .survrow .pn{display:block;font-weight:600;margin-bottom:6px}
+  .nums{display:flex;gap:5px;direction:ltr}
+  .num-b{flex:1;height:36px;border-radius:10px;background:var(--chip);font-weight:700;color:var(--muted)}
+  .num-b.on{background:#f0b429;color:#1a1300}
 </style>
 </head>
 <body>
@@ -377,7 +385,7 @@ const S = {
   tab: location.hash==="#teams" ? "teams" : location.hash==="#stats" ? "stats" : "list",
   showPaste:false, confirmReset:false, confirmCancel:false, copyText:null, busy:false,
   subSel:new Set(), showColors:false, showImg:null, showText:null,
-  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false, showGuest:false, confirmGuest:false, editHist:null, histDraft:null, editPhone:null, colorPick:null, swapSel:null, myToken:null, adminPushOk:false, lastWin:null, winBusy:false, playersView:"rate", prioBanner:null, payForm:false, confirmPayCancel:false, busyTeams:false, pushTest:{uids:[],names:[]}, testing:false, showContacts:false, phoneNames:{}, setOpen:null, prioEdit:false, confirmDel:null, confirmResetHist:false
+  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false, showGuest:false, confirmGuest:false, editHist:null, histDraft:null, editPhone:null, colorPick:null, swapSel:null, myToken:null, adminPushOk:false, lastWin:null, winBusy:false, playersView:"rate", prioBanner:null, payForm:false, confirmPayCancel:false, busyTeams:false, pushTest:{uids:[],names:[]}, testing:false, showContacts:false, phoneNames:{}, setOpen:null, prioEdit:false, survey:null, surveyResults:null, myVote:null, voteDraft:null, surveyOpenUI:false, surveySel:null, confirmDel:null, confirmResetHist:false
 };
 try{ S.promoted = JSON.parse(localStorage.getItem("promoted")||"[]"); }catch(e){}
 let dismissedSug=new Set(); try{ dismissedSug=new Set(JSON.parse(localStorage.getItem("dismissedSug")||"[]")); }catch(e){}
@@ -474,6 +482,7 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 const cfgRef = doc(db,"config","main"), teamsRef = doc(db,"teams","current"), ratRef = doc(db,"ratings","main"), paidRef = doc(db,"payments","current");
+const surveyRef = doc(db,"survey","current"), surveyResRef = doc(db,"survey","results");
 const ownerRef = doc(db,"owner","admins"), apartRef = doc(db,"admin","apart");
 const fns = getFunctions(app, "europe-west1");
 const signCol = collection(db,"signups"), votesCol = collection(db,"votes"), histCol = collection(db,"history"), mvpCol = collection(db,"mvpVotes"), latesRef = doc(db,"lates","main");
@@ -500,6 +509,7 @@ function subscribe(){
   onSnapshot(paidRef, s=>{ const d=s.exists()?s.data():{}; S.pay=d; S.paid=new Set(d.paid||[]); render(); }, e=>console.warn("paid",e));
   onSnapshot(collection(db,"payMarks"), q=>{ const m={}; q.docs.forEach(d=>{ m[d.id]=d.data(); }); S.payMarks=m; render(); }, e=>console.warn("payMarks",e));
   onSnapshot(mvpCol, q=>{ S.mvpVotes=q.docs.map(d=>({id:d.id, ...d.data()})); render(); }, e=>console.warn("mvp",e));
+  onSnapshot(surveyRef, s=>{ S.survey = s.exists()?s.data():null; render(); }, e=>console.warn("survey",e));
   onSnapshot(histCol, q=>{ S.history=q.docs.map(d=>({id:d.id, ...d.data()})).sort((a,b)=>(a.at||0)-(b.at||0)); render(); }, e=>console.warn("history",e));
 }
 function fail(e){ console.error(e); S.loading=false; S.error="לא הצלחתי לטעון את הנתונים. בדוק חיבור לאינטרנט."; render(); }
@@ -520,6 +530,7 @@ async function checkAdmin(user){
     // only the owner may read ratings; a successful read tells us this is the owner
     try{ await getDoc(ratRef); S.isOwner=true; }catch(e){ S.isOwner=false; }
     if(S.isOwner){
+      onSnapshot(surveyResRef, s=>{ S.surveyResults = s.exists()?s.data():null; render(); }, ()=>{});
       ratUnsub = onSnapshot(ratRef, s=>{ const d=s.exists()?s.data():{}; S.ratings=d.list||[];
         // one-time move of "not together" pairs to the organizers' shared doc
         S.oldApart = Array.isArray(d.apart) ? d.apart : []; migrateApart();
@@ -541,6 +552,7 @@ onAuthStateChanged(auth, async user=>{
   if(!user){ try{ await signInAnonymously(auth); }catch(e){ fail(e); } return; }
   const first=!S.uid; S.uid = user.uid;
   if(first){ initPush(); if(user.isAnonymous) backfillPhoneName(); }
+  getDoc(doc(db,"surveyVotes",user.uid)).then(d=>{ S.myVote = d.exists()?d.data():null; render(); }).catch(()=>{});
   await checkAdmin(user);
 });
 subscribe();
@@ -1386,6 +1398,86 @@ function installCard(){
     h("div",{class:"hint",style:"margin-top:4px"},"חשוב: אחרי שהוספת, תמיד תיכנס דרך האייקון, כדי שתוכל לבטל הרשמה."));
 }
 
+// ---------- anonymous rating survey ----------
+const surveyOpen = () => !!(S.survey && S.survey.open);
+async function openSurvey(names){
+  if(names.length<2){ toast("בחר לפחות 2 שחקנים"); return; }
+  const sv={open:true, round:Date.now(), names, max:RATING_MAX};
+  S.survey=sv; S.surveySel=null; render();
+  await run(()=>setDoc(surveyRef,sv),"⭐ הסקר נפתח");
+}
+async function closeSurvey(){ await run(()=>updateDoc(surveyRef,{open:false, closedAt:Date.now()}),"הסקר נסגר"); }
+function applySurveyAverages(){
+  const res=S.surveyResults; if(!res || res.round!==(S.survey&&S.survey.round)){ toast("אין עדיין תוצאות"); return; }
+  const avg=res.avg||{}; let n=0;
+  const list=S.ratings.slice();
+  (S.survey.names||[]).forEach(name=>{
+    const a=avg[norm(name)]; if(!a||!a.n) return;
+    const r=Math.round(a.a*10)/10, i=list.findIndex(x=>norm(x.n)===norm(name));
+    if(i>=0) list[i]={...list[i], r, since:Date.now()}; else list.push({n:name, r, gk:false, since:Date.now()});
+    n++;
+  });
+  S.ratings=list; render(); saveRoster(true);
+  toast(`עודכנו ${n} דירוגים לפי הסקר ✔`);
+}
+async function submitVote(){
+  const sv=S.survey; if(!sv||!sv.open) return;
+  const d=S.voteDraft||{}, r={};
+  Object.entries(d).forEach(([k,v])=>{ if(v>=1 && v<=sv.max) r[k]=v; });
+  if(!Object.keys(r).length){ toast("דרג לפחות שחקן אחד"); return; }
+  const ok=await run(()=>setDoc(doc(db,"surveyVotes",S.uid),{round:sv.round, r}),"✔ הדירוג נשלח, תודה!");
+  if(ok){ S.myVote={round:sv.round, r}; S.surveyOpenUI=false; render(); }
+}
+function surveyText(){ return `⭐ סקר דירוגים אנונימי לכדורגל!\nדרגו את השחקנים מ-1 עד ${RATING_MAX}. אף אחד לא רואה מה כל אחד דירג, רק ממוצע.\n${pageUrl()}#survey`; }
+function surveyCard(){
+  const sv=S.survey; if(!sv||!sv.open) return null;
+  const voted=S.myVote && S.myVote.round===sv.round;
+  if(!S.surveyOpenUI) return h("button",{class:"card votecall survcall",onclick:()=>{ S.surveyOpenUI=true; S.voteDraft = voted ? {...S.myVote.r} : (S.voteDraft||{}); render(); }},
+    h("b",null,"⭐ סקר דירוגים אנונימי"), h("span",null, voted?"✔ דירגת · לחץ כדי לעדכן":"עזור לאזן את הכוחות: דרג את השחקנים"));
+  const me=norm(lsGet("myName")), d=S.voteDraft||(S.voteDraft={});
+  const names=(sv.names||[]).filter(n=>norm(n)!==me);
+  return h("div",{class:"card surv"},
+    h("h2",null,"⭐ סקר דירוגים",h("span",{class:"count"},`${Object.keys(d).filter(k=>d[k]).length}/${names.length}`)),
+    h("div",{class:"hint"},`1 = חלש, ${sv.max} = חזק מאוד. אם אתה לא מכיר מישהו, דלג עליו. הדירוג אנונימי: אף אחד לא רואה מה דירגת, רק ממוצע של כולם.`),
+    names.map(n=>{ const k=norm(n), v=d[k]||0;
+      return h("div",{class:"survrow"},
+        h("span",{class:"pn"},n),
+        h("div",{class:"nums"},Array.from({length:sv.max},(_,i)=>i+1).map(i=>h("button",{class:"num-b"+(v===i?" on":""),onclick:()=>{ d[k]=v===i?0:i; render(); }},i)))); }),
+    h("div",{class:"share",style:"margin-top:12px"},
+      h("button",{class:"btn ghost",onclick:()=>{S.surveyOpenUI=false;render();}},"סגור"),
+      h("button",{class:"btn",onclick:submitVote},voted?"עדכן דירוג":"שלח דירוג")));
+}
+function surveyAdminCard(){
+  const sv=S.survey, res=S.surveyResults, open=surveyOpen();
+  const fresh=res && sv && res.round===sv.round;
+  if(!open && !(sv && fresh)){
+    const names=knownNames(), sel=S.surveySel || (S.surveySel=new Set(S.signups.slice(0,S.cfg.capacity).map(s=>s.name)));
+    return h("div",{class:"card"},
+      h("h2",null,"⭐ סקר דירוגים"),
+      h("div",{class:"hint"},"השחקנים מדרגים אחד את השני באנונימיות, ואתה רואה רק ממוצע לכל שחקן. בחר את מי לדרג:"),
+      h("div",{class:"winlinks",style:"justify-content:flex-start"},
+        h("button",{class:"linkbtn",onclick:()=>{ S.surveySel=new Set(names); render(); }},"בחר הכל"),
+        h("button",{class:"linkbtn muted",onclick:()=>{ S.surveySel=new Set(); render(); }},"נקה")),
+      h("div",{class:"chips"},names.map(n=>h("button",{class:"chip"+(sel.has(n)?" on":""),onclick:()=>{ sel.has(n)?sel.delete(n):sel.add(n); render(); }},n))),
+      h("button",{class:"btn full",style:"margin-top:10px",onclick:()=>openSurvey([...sel])},`⭐ פתח סקר (${sel.size} שחקנים)`));
+  }
+  const avg=(fresh&&res.avg)||{};
+  const rows=(sv.names||[]).map(n=>({n, a:avg[norm(n)]})).sort((x,y)=>((y.a&&y.a.a)||0)-((x.a&&x.a.a)||0));
+  return h("div",{class:"card"},
+    h("h2",null,"⭐ סקר דירוגים",h("span",{class:"count"},`${(fresh&&res.voters)||0} הצביעו`)),
+    open ? h("div",{class:"hint"},"הסקר פתוח. התוצאות מתעדכנות כל פעם שמישהו מדרג.") : h("div",{class:"hint"},"הסקר סגור."),
+    open ? h("div",null,h("div",{class:"hint",style:"margin-top:6px"},"שלח לקבוצה:"),shareRow(surveyText())) : null,
+    h("div",{class:"paylist"},rows.map(x=>h("div",{class:"payrow"},
+      h("span",{class:"pn"},x.n),
+      h("span",{class:"ps"},x.a&&x.a.n?`${x.a.n} מדרגים`:"אין עדיין"),
+      h("b",{style:"min-width:36px;text-align:center"},x.a&&x.a.n?(Math.round(x.a.a*10)/10).toFixed(1):"–"),
+      h("span",{class:"ps",style:"min-width:30px;text-align:center"},`(${ratingOf(x.n)})`)))),
+    h("div",{class:"hint",style:"margin-top:4px"},"בסוגריים: הדירוג הנוכחי שלך."),
+    h("button",{class:"btn full",style:"margin-top:10px",onclick:applySurveyAverages},"✔ החל ממוצעים על הדירוגים"),
+    open ? h("button",{class:"btn ghost full",style:"margin-top:8px",onclick:closeSurvey},"סגור סקר") :
+      h("button",{class:"linkbtn",onclick:()=>{ S.survey={...sv, round:0}; S.surveySel=null; render(); }},"פתח סקר חדש"));
+}
+
 // ---------- render ----------
 function render(){
   const cap=S.cfg.capacity, n=S.signups.length, inN=Math.min(n,cap), wN=Math.max(0,n-cap), open=isOpen();
@@ -1600,6 +1692,7 @@ function viewList(){
   const cap=S.cfg.capacity, out=[];
   if(S.error) out.push(h("div",{class:"note"},S.error));
   out.push(...promoCards());
+  out.push(surveyCard());
   if(S.teams && S.teams.status==="voting" && !S.isAdmin)
     out.push(h("button",{class:"card votecall",onclick:()=>{S.tab="teams";render();}},
       h("b",null,"🗳️ יש הצבעה על הכוחות!"), h("span",null, myVote()==null ? "לחץ כאן כדי להצביע" : `הצבעת ל${OPT_NAMES[myVote()]} · לחץ לצפייה`)));
@@ -1992,7 +2085,7 @@ function viewPlayers(){
         const row=h("div",{class:"prow"},
           h("div",{class:"nm click",onclick:()=>{ S.editPhone=S.editPhone===n?null:n; render(); }},h("b",null,n),h("small",{class:"unr"}, (r?`דירוג ${val}`:"לא דורג")+(gk?" · שוער":"")+(ph?" · 📱":""))),
           h("button",{class:"ic gk"+(gk?" on":""),title:"שוער",onclick:()=>toggleGK(n)},"🧤"),
-          h("div",{class:"stars"},Array.from({length:RATING_MAX},(_,k)=>k+1).map(i=>h("button",{class:i<=val?"on":"","aria-label":String(i),onclick:()=>setRating(n,i)},"★"))),
+          h("div",{class:"stars"},Array.from({length:RATING_MAX},(_,k)=>k+1).map(i=>h("button",{class:i<=Math.round(val)?"on":"","aria-label":String(i),onclick:()=>setRating(n,i)},"★"))),
           r?h("button",{class:"ic x",title:"הסר מהקבועים",onclick:()=>removeFromRoster(n)},"×"):h("span",{style:"width:28px"}));
         if(S.editPhone!==n) return row;
         const pin=h("input",{id:"ph_"+n,type:"tel",dir:"ltr",inputmode:"tel",placeholder:"050-0000000",value:S.draft["ph:"+n] ?? prettyPhone((r&&r.phone)||""),oninput:e=>{S.draft["ph:"+n]=e.target.value;}});
@@ -2109,6 +2202,7 @@ function settingsSummary(title){
   if(title.includes("ביטולים")) return ((c.lockHours||0)?`חסימה ${c.lockHours} ש׳`:"בלי חסימה")+(c.allowGuests===false?" · בלי אורחים":"");
   if(title.includes("הגדרות המשחק")) return `${c.capacity} שחקנים · ${c.numTeams} קבוצות`;
   if(title.includes("שבוע חדש")) return "איפוס הרשימה";
+  if(title.includes("סקר")) return surveyOpen()?`פתוח · ${(S.surveyResults&&S.surveyResults.round===S.survey.round&&S.surveyResults.voters)||0} הצביעו`:"דירוג אנונימי";
   if(title.includes("לא ביחד")) return S.apart.length?`${S.apart.length} זוגות`:"אין זוגות";
   return "";
 }
@@ -2206,6 +2300,7 @@ function settingsCards(){
     contactsCard(),
     prioCard(),
     S.isOwner ? adminsCard() : null,
+    S.isOwner ? surveyAdminCard() : null,
     apartCard(),
     h("div",{class:"card"},
       h("h2",null,"📍 פרטי המשחק"),
@@ -2239,7 +2334,8 @@ function settingsCards(){
   ];
 }
 
-window.addEventListener("hashchange",()=>{ const t=location.hash.slice(1); if(t==="teams"||t==="stats"){ S.tab=t; render(); } });
+window.addEventListener("hashchange",()=>{ const t=location.hash.slice(1); if(t==="teams"||t==="stats"){ S.tab=t; render(); } if(t==="survey"){ S.tab="list"; S.surveyOpenUI=true; render(); } });
+if(location.hash==="#survey"){ S.surveyOpenUI=true; }
 render();
 
 </script>

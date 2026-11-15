@@ -381,3 +381,39 @@ exports.testPush = onCall(async (req) => {
   }
   return { sent: list.length };
 });
+
+// ---------- anonymous rating survey ----------
+// Every vote recomputes the averages from scratch. Only the average and the number of raters per player are stored.
+async function aggregateSurvey() {
+  const sv = await db.doc("survey/current").get();
+  if (!sv.exists) return;
+  const { round, names = [], max = 7 } = sv.data();
+  const keys = new Set(names.map(norm));
+  const snap = await db.collection("surveyVotes").where("round", "==", round).get();
+  const sum = {};
+  snap.docs.forEach((d) => {
+    const r = d.data().r || {};
+    for (const [k, v] of Object.entries(r)) {
+      const n = Number(v);
+      if (!keys.has(k) || !(n >= 1 && n <= max)) continue;
+      (sum[k] = sum[k] || { s: 0, n: 0 }).s += n; sum[k].n++;
+    }
+  });
+  const avg = {};
+  for (const [k, { s, n }] of Object.entries(sum)) avg[k] = { a: Math.round((s / n) * 100) / 100, n };
+  await db.doc("survey/results").set({ round, avg, voters: snap.size, at: Date.now() });
+}
+exports.onSurveyVote = onDocumentWritten("surveyVotes/{id}", aggregateSurvey);
+
+exports.onSurveyChange = onDocumentWritten("survey/current", async (event) => {
+  const b = (event.data.before && event.data.before.exists && event.data.before.data()) || {};
+  const a = (event.data.after && event.data.after.exists && event.data.after.data()) || {};
+  if (a.open && (!b.open || b.round !== a.round)) {
+    await db.doc("survey/results").set({ round: a.round, avg: {}, voters: 0, at: Date.now() });
+    const toks = await allTokens();
+    await sendAll(toks.map((t) => ({ ...t,
+      title: "⭐ סקר דירוגים אנונימי",
+      body: "דרגו את השחקנים כדי שהכוחות יהיו מאוזנים. אף אחד לא רואה מה דירגתם.",
+      link: APP_URL + "#survey" })));
+  }
+});
