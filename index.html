@@ -1569,17 +1569,23 @@ function surveyAdminCard(){
       return h("div",null,
         h("div",{class:"sub-h"},`✔ ענו (${who.length})`),
         who.length ? h("div",{class:"chips"},who.map(n=>{ const inSv=(sv.names||[]).some(x=>norm(x)===norm(n));
-          return inSv ? h("span",{class:"chip on"},n) : h("button",{class:"chip on unk"+(S.aliasFor===n?" sel":""),onclick:()=>{ S.aliasFor=S.aliasFor===n?null:n; render(); }},n+" ❔"); })) : h("div",{class:"hint"},"עוד אף אחד"),
+          return h("button",{class:"chip on"+(inSv?"":" unk")+(S.aliasFor===n?" sel":""),onclick:()=>{ S.aliasFor=S.aliasFor===n?null:n; render(); }},inSv?n:n+" ❔"); })) : h("div",{class:"hint"},"עוד אף אחד"),
         who.some(n=>!(sv.names||[]).some(x=>norm(x)===norm(n))) && !S.aliasFor ? h("div",{class:"hint",style:"margin-top:4px"},"❔ = שם שלא מופיע בסקר. לחץ עליו כדי לבחור מי זה."): null,
         S.aliasFor ? h("div",{class:"aliasbox"},
-          h("div",{class:"hint"},`מי זה "${S.aliasFor}"?`),
-          h("div",{class:"chips"},not.concat((sv.names||[]).filter(n=>!not.includes(n))).map(n=>h("button",{class:"chip",onclick:async()=>{
+          ((res&&res.votes)||[]).filter(v=>norm(v.name)===norm(S.aliasFor)).map((v,i,arr)=>h("div",{class:"logp"},
+            h("span",{class:"pn"},`🗳️ הצבעה${arr.length>1?" "+(i+1):""}`+(v.at?` · ${fmtTime(v.at)}`:"")+(v.used?"":" (לא נספרת)")),
+            h("button",{class:"btn ghost",style:"padding:6px 12px",onclick:async()=>{
+              if(!confirm(`למחוק את ההצבעה הזו של ${S.aliasFor}?`)) return;
+              await run(()=>deleteDoc(doc(db,"surveyVotes",v.id)),"🗑️ ההצבעה נמחקה"); }},"🗑️ מחק"))),
+          (sv.names||[]).some(x=>norm(x)===norm(S.aliasFor)) ? null : h("div",{class:"hint"},`מי זה "${S.aliasFor}"?`),
+          (sv.names||[]).some(x=>norm(x)===norm(S.aliasFor)) ? null : h("div",{class:"chips"},not.concat((sv.names||[]).filter(n=>!not.includes(n))).map(n=>h("button",{class:"chip",onclick:async()=>{
             const al={...(sv.alias||{}), [norm(S.aliasFor)]:n}; S.aliasFor=null; render();
             await run(()=>updateDoc(surveyRef,{alias:al}),`✔ עודכן: ${n}`); }},n)))) : null,
         open && not.length ? h("div",null,h("div",{class:"sub-h"},`⏳ עוד לא ענו (${not.length})`),h("div",{class:"chips"},not.map(n=>h("span",{class:"chip"},n)))) : null,
         Object.keys((fresh&&res.dups)||{}).length ? h("div",{class:"hint",style:"margin-top:6px;color:var(--wait)"},
           "👥 "+Object.entries(res.dups).map(([n,c])=>`${n} ענה מ-${c} מכשירים`).join(" · ")+". נספר רק הדירוג האחרון שלו.") : null,
-        h("div",{class:"hint"},"רואים רק מי ענה, לא מה הוא דירג.")); })(),
+        h("div",{class:"hint"},"רואים רק מי ענה, לא מה הוא דירג. לחץ על שם כדי למחוק לו הצבעה."),
+        h("button",{class:"linkbtn",onclick:()=>run(()=>updateDoc(surveyRef,{recalc:Date.now()}),"🔄 התוצאות מחושבות מחדש")},"🔄 חשב תוצאות מחדש")); })(),
     h("div",{class:"paylist"},rows.map(x=>h("div",{class:"payrow"},
       h("span",{class:"pn"},x.n),
       h("span",{class:"ps"},x.a&&x.a.n?`${x.a.n} מדרגים`:"אין עדיין"),

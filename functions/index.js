@@ -511,7 +511,10 @@ async function aggregateSurvey() {
   const avg = {};
   for (const [k, { s, n }] of Object.entries(sum)) avg[k] = { a: Math.round((s / n) * 100) / 100, n };
   const who = counted.map((d) => voterName[d.id]).sort((x, y) => x.localeCompare(y, "he"));
-  await db.doc("survey/results").set({ round, avg, voters: counted.length, who, dups, at: Date.now() });
+  // every vote (not its content) so the organizer can delete one: id, whose, when, and whether it counts
+  const keep = new Set(counted.map((d) => d.id));
+  const votes = snap.docs.map((d) => ({ id: d.id, name: voterName[d.id], at: d.updateTime && d.updateTime.toMillis ? d.updateTime.toMillis() : 0, used: keep.has(d.id) }));
+  await db.doc("survey/results").set({ round, avg, voters: counted.length, who, dups, votes, at: Date.now() });
 }
 exports.onSurveyVote = onDocumentWritten("surveyVotes/{id}", aggregateSurvey);
 // a voter who adds his name later: refresh the "who answered" list
@@ -523,7 +526,7 @@ exports.onPhoneForSurvey = onDocumentWritten("phones/{id}", async (event) => {
 exports.onSurveyChange = onDocumentWritten("survey/current", async (event) => {
   const b = (event.data.before && event.data.before.exists && event.data.before.data()) || {};
   const a = (event.data.after && event.data.after.exists && event.data.after.data()) || {};
-  if (a.round === b.round && JSON.stringify(a.alias || {}) !== JSON.stringify(b.alias || {})) await aggregateSurvey();
+  if (a.round === b.round && (JSON.stringify(a.alias || {}) !== JSON.stringify(b.alias || {}) || a.recalc !== b.recalc)) await aggregateSurvey();
   if (a.open && (!b.open || b.round !== a.round)) {
     await db.doc("survey/results").set({ round: a.round, avg: {}, voters: 0, at: Date.now() });
     const toks = await allTokens();
