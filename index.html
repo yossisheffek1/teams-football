@@ -1577,6 +1577,8 @@ function surveyAdminCard(){
             const al={...(sv.alias||{}), [norm(S.aliasFor)]:n}; S.aliasFor=null; render();
             await run(()=>updateDoc(surveyRef,{alias:al}),`✔ עודכן: ${n}`); }},n)))) : null,
         open && not.length ? h("div",null,h("div",{class:"sub-h"},`⏳ עוד לא ענו (${not.length})`),h("div",{class:"chips"},not.map(n=>h("span",{class:"chip"},n)))) : null,
+        Object.keys((fresh&&res.dups)||{}).length ? h("div",{class:"hint",style:"margin-top:6px;color:var(--wait)"},
+          "👥 "+Object.entries(res.dups).map(([n,c])=>`${n} ענה מ-${c} מכשירים`).join(" · ")+". נספר רק הדירוג האחרון שלו.") : null,
         h("div",{class:"hint"},"רואים רק מי ענה, לא מה הוא דירג.")); })(),
     h("div",{class:"paylist"},rows.map(x=>h("div",{class:"payrow"},
       h("span",{class:"pn"},x.n),

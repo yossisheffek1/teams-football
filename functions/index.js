@@ -488,8 +488,19 @@ async function aggregateSurvey() {
     }
     voterName[d.id] = alias[norm(name)] || name || "לא ידוע";
   }
+  // one vote per person: if the same name voted from two devices (e.g. Safari and the home-screen app), keep the latest
+  const latest = new Map(), dups = {};
+  for (const d of snap.docs) {
+    const key = norm(voterName[d.id]);
+    if (key === norm("לא ידוע")) { latest.set(d.id, d); continue; }
+    const prev = latest.get(key);
+    if (prev) dups[voterName[d.id]] = (dups[voterName[d.id]] || 1) + 1;
+    const t = (x) => (x.updateTime && x.updateTime.toMillis ? x.updateTime.toMillis() : 0);
+    if (!prev || t(d) >= t(prev)) latest.set(key, d);
+  }
+  const counted = [...latest.values()];
   const sum = {};
-  snap.docs.forEach((d) => {
+  counted.forEach((d) => {
     const r = d.data().r || {}, self = norm(voterName[d.id]);
     for (const [k, v] of Object.entries(r)) {
       const n = Number(v);
@@ -499,8 +510,8 @@ async function aggregateSurvey() {
   });
   const avg = {};
   for (const [k, { s, n }] of Object.entries(sum)) avg[k] = { a: Math.round((s / n) * 100) / 100, n };
-  const who = Object.values(voterName).sort((x, y) => x.localeCompare(y, "he"));
-  await db.doc("survey/results").set({ round, avg, voters: snap.size, who, at: Date.now() });
+  const who = counted.map((d) => voterName[d.id]).sort((x, y) => x.localeCompare(y, "he"));
+  await db.doc("survey/results").set({ round, avg, voters: counted.length, who, dups, at: Date.now() });
 }
 exports.onSurveyVote = onDocumentWritten("surveyVotes/{id}", aggregateSurvey);
 // a voter who adds his name later: refresh the "who answered" list
