@@ -281,8 +281,44 @@ exports.onConfigChange = onDocumentUpdated("config/main", async (event) => {
   if (!after.open && !before.prioOpen && after.prioOpen) await announcePrio(after, "manual:" + Date.now());
 });
 
+// MVP vote closes by itself after 24 hours; a tie makes all the leaders MVP
+async function autoCloseMvp() {
+  const m = await db.doc("mvp/current").get();
+  if (!m.exists) return;
+  const M = m.data();
+  if (!M.open || !M.closeAt || Date.now() < M.closeAt) return;
+  const t = await mvpTallyNow();
+  const counts = (t && t.counts) || {};
+  const max = Math.max(0, ...Object.values(counts));
+  const winners = max > 0 ? Object.keys(counts).filter((n) => counts[n] === max) : [];
+  const ok = await db.runTransaction(async (tx) => {
+    const cur = await tx.get(m.ref);
+    if (!cur.exists || !cur.data().open) return false;
+    tx.set(m.ref, { ...cur.data(), open: false, winners, closedBy: "auto" });
+    return true;
+  });
+  if (!ok) return;
+  if (winners.length) {
+    await db.doc(`history/${M.round}`).set({ at: M.round, mvp: winners.length > 1 ? winners : winners[0] }, { merge: true });
+    const tm = await db.doc("teams/current").get();
+    if (tm.exists && tm.data().at === M.round) await tm.ref.update({ mvp: winners.join(" ו"), mvpOpen: false });
+    const toks = await playerTokens((M.names || []).map((n) => ({ name: n })));
+    await sendAll(toks.map((x) => ({ ...x, link: APP_URL + "#teams",
+      title: "⭐ ה-MVP נבחר!", body: winners.length > 1 ? `תיקו! ${winners.join(" ו")} הם ה-MVP של הערב 👏` : `${winners[0]} הוא ה-MVP של הערב 👏` })));
+  }
+}
+// the MVP vote opened: tell the players of that game
+exports.onMvpOpen = onDocumentWritten("mvp/current", async (event) => {
+  const b = (event.data.before && event.data.before.exists && event.data.before.data()) || {};
+  const a = (event.data.after && event.data.after.exists && event.data.after.data()) || {};
+  if (!a.open || (b.open && b.round === a.round && b.closeAt === a.closeAt)) return;
+  const toks = await playerTokens((a.names || []).map((n) => ({ name: n })));
+  await sendAll(toks.map((t) => ({ ...t, link: APP_URL + "#teams", title: "⭐ מי ה-MVP של הערב?", body: "ההצבעה פתוחה 24 שעות. היכנס והצבע לשחקן הטוב ביותר" })));
+});
+
 // auto-open at the scheduled time (checked every minute)
 exports.checkAutoOpen = onSchedule({ schedule: "every 1 minutes", timeZone: "Asia/Jerusalem" }, async () => {
+  await autoCloseMvp().catch((e) => console.error("mvp close", e));
   const cfg = await getConfig();
   const ph = Number(cfg.prioHours) || 0;
   if (cfg.openAt && ph > 0 && !cfg.open && Date.now() >= cfg.openAt - ph * 3600000 && Date.now() < cfg.openAt) {
@@ -683,9 +719,18 @@ exports.onPrevMark = onDocumentWritten("prevMarks/{id}", async (event) => {
 });
 
 // ---------- MVP tally for organizers who may not read the votes themselves ----------
+async function mvpTallyNow() {
+  const m = await db.doc("mvp/current").get();
+  const round = m.exists ? m.data().round : null;
+  if (!round) return null;
+  const snap = await db.collection("mvpVotes").where("round", "==", round).get();
+  const counts = {}, voters = [];
+  snap.docs.forEach((d) => { const n = d.data().name; if (typeof n !== "string") return; counts[n] = (counts[n] || 0) + 1; voters.push(d.id); });
+  return { M: m.data(), round, counts, voters };
+}
 exports.onMvpVote = onDocumentWritten("mvpVotes/{id}", async () => {
-  const t = await db.doc("teams/current").get();
-  const round = t.exists ? t.data().at : null;
+  const m = await db.doc("mvp/current").get();
+  const round = m.exists ? m.data().round : null;
   if (!round) return;
   const snap = await db.collection("mvpVotes").where("round", "==", round).get();
   const counts = {}, voters = [];
