@@ -752,6 +752,10 @@ function recordLate(name){
   S.lates=S.lates.concat([{n:name, at:Date.now()}]);
   run(()=>setDoc(latesRef,{list:S.lates}), `${name} נרשם כביטול מאוחר ⏰`);
 }
+function addLateManual(name){
+  S.lates=S.lates.concat([{n:name, at:Date.now(), manual:true}]); render();
+  run(()=>setDoc(latesRef,{list:S.lates}), `${name} נרשם כביטול מאוחר ⏰`);
+}
 function removeLate(name){ S.lates=S.lates.filter(x=>norm(x.n)!==norm(name)); render(); run(()=>setDoc(latesRef,{list:S.lates})); }
 let cfgChain=Promise.resolve();
 function setCfg(p, msg){ const c={...S.cfg,...p}; S.cfg=c; armOpenTimer(); render(); cfgChain=cfgChain.then(()=>run(()=>setDoc(cfgRef,c), msg)); }
@@ -2205,7 +2209,7 @@ async function bringIn(newName, oldName){
   S.inSel=null; render();
   await replacePlayer(oldName, newName);
   const su=S.signups.find(s=>norm(s.name)===norm(oldName) && !s.guestOf);
-  if(su && confirm(`${newName} נכנס במקום ${oldName}.\nלהוציא את ${oldName} גם מרשימת השבוע?`)) await run(()=>deleteDoc(doc(db,"signups",su.id)),`${oldName} הוצא מהרשימה`);
+  if(su && confirm(`${newName} נכנס במקום ${oldName}.\nלהוציא את ${oldName} גם מרשימת השבוע?`)) { await run(()=>deleteDoc(doc(db,"signups",su.id)),`${oldName} הוצא מהרשימה`); if(cancelLocked()) recordLate(oldName); }
 }
 function waitingInCard(){
   const T=S.teams; if(!T || !S.isAdmin) return null;
@@ -2543,7 +2547,14 @@ function latesCard(){
   const lateCount=new Map(); S.lates.forEach(x=>{ const k=norm(x.n); const o=lateCount.get(k)||{n:x.n,c:0,last:0}; o.c++; o.last=Math.max(o.last,x.at||0); lateCount.set(k,o); });
   return h("div",{class:"card"},
       h("h2",null,"⏰ ביטולים מאוחרים"),
-      h("div",{class:"hint"},"כשאתה מסיר שחקן בזמן חסימת הביטול, זה נרשם כאן אוטומטית."),
+      h("div",{class:"hint"},"כשאתה מסיר שחקן בזמן חסימת הביטול, זה נרשם כאן אוטומטית. אפשר גם להוסיף ידנית (למשל מי שביטל בוואטסאפ):"),
+      h("div",{class:"chips",style:"margin-top:6px"},
+        S.signups.filter(x=>!x.guestOf).map(x=>x.name).concat(S.lateAdd?knownNames().filter(n=>!S.signups.some(x=>norm(x.name)===norm(n))):[])
+          .map(n=>h("button",{class:"chip",onclick:()=>{ if(confirm(`לרשום ל${n} ביטול מאוחר?`)) addLateManual(n); }},`+ ${n}`))),
+      h("div",{class:"addrow",style:"margin-top:8px"},
+        h("input",{id:"f_lateName",type:"text",placeholder:"או כתוב שם",value:S.draft.lateName||"",oninput:e=>{S.draft.lateName=e.target.value;}}),
+        h("button",{class:"btn",onclick:()=>{ const n=clean(S.draft.lateName||""); if(!n){ toast("כתוב שם"); return; } delete S.draft.lateName; addLateManual(n); }},"הוסף")),
+      S.lateAdd ? null : h("button",{class:"linkbtn muted",onclick:()=>{ S.lateAdd=true; render(); }},"הצג גם שחקנים שלא ברשימה השבוע"),
       lateCount.size ? [...lateCount.values()].sort((a,b)=>b.c-a.c).map(o=>h("div",{class:"prow"},
         h("div",{class:"nm"},h("b",null,o.n),h("small",{class:"unr"},`${o.c} ביטולים · אחרון ${fmtDate(o.last)}`)),
         h("button",{class:"ic x",title:"אפס",onclick:()=>removeLate(o.n)},"×"))) : h("div",{class:"empty"},"אין ביטולים מאוחרים 👍"));
