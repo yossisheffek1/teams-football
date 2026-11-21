@@ -579,7 +579,7 @@ onAuthStateChanged(auth, async user=>{
   if(!user){ try{ await signInAnonymously(auth); }catch(e){ fail(e); } return; }
   const first=!S.uid; S.uid = user.uid; S.authPhone = user.phoneNumber || null;
   if(S.authPhone && !lsGet("myName")) identifyMe();
-  if(first){ initPush(); if(user.isAnonymous){ backfillPhoneName(); if(lsGet("myName")) saveWho(lsGet("myName")); } }
+  if(first){ initPush(); }
   getDoc(doc(db,"surveyVotes",user.uid)).then(d=>{ S.myVote = d.exists()?d.data():null; render(); }).catch(()=>{});
   await checkAdmin(user);
 });
@@ -640,22 +640,10 @@ async function selfRegister(name){
   lsSet("myName", name); saveWho(name);
   S.busy=true; render();
   await run(()=>setDoc(doc(db,"signups",S.uid), {name, ts:serverTimestamp(), uid:S.uid}));
-  const ph=normPhone(S.draft.myPhone ?? lsGet("myPhone"));
-  if(ph){ lsSet("myPhone",ph); savePhone(ph); }
   if(messaging && S.pushState==="on") refreshToken(false);
   S.busy=false; render();
   const me=mySignup();
   if(me){ const i=S.signups.indexOf(me); toast(i<S.cfg.capacity ? `נרשמת! מקום ${i+1} ⚽` : `הרשימה מלאה, אתה מקום ${i-S.cfg.capacity+1} בהמתנה`); }
-}
-function savePhone(ph){
-  if(!S.uid || S.authPhone) return;   // logged-in players: the server keeps the verified phone
-  const name=clean(lsGet("myName"));
-  setDoc(doc(db,"phones",S.uid), name?{phone:ph, name}:{phone:ph}).then(()=>{ lsSet("phoneSaved",ph); if(name) lsSet("phoneNamed",name); }).catch(e=>console.warn("phone",e));
-}
-// phones saved before names were stored: add the name once, silently
-function backfillPhoneName(){
-  const ph=lsGet("myPhone"), name=clean(lsGet("myName"));
-  if(ph && name && lsGet("phoneNamed")!==name) savePhone(ph);
 }
 function myGuest(){ return S.signups.find(s=>s.id===S.uid+"_g" && s.uid===S.uid); }
 async function selfCancel(){
@@ -1546,7 +1534,7 @@ function surveyCard(){
   const voted=S.myVote && S.myVote.round===sv.round;
   if(!S.surveyOpenUI) return h("button",{class:"card votecall survcall",onclick:()=>{ S.surveyOpenUI=true; S.voteDraft = voted ? {...S.myVote.r} : (S.voteDraft||{}); render(); }},
     h("b",null,"⭐ סקר דירוגים אנונימי"), h("span",null, voted?"✔ דירגת · לחץ כדי לעדכן":"עזור לאזן את הכוחות: דרג את השחקנים"));
-  if(!S.isAdmin && !loggedIn() && (S.cfg.requireLogin || !surveyKnown())) return loginCard("כדי לדרג צריך להתחבר פעם אחת עם הטלפון. הדירוג נשאר אנונימי.");
+  if(!S.isAdmin && !loggedIn()) return loginCard("כדי לדרג צריך להתחבר פעם אחת עם הטלפון. הדירוג נשאר אנונימי.");
   if(!S.isAdmin && loggedIn() && !lsGet("myName")) return loginCard();
   if((S.isAdmin && !surveyKnown()) || S.survGate) return h("div",{class:"card surv"},
     h("h2",null,"⭐ סקר דירוגים"),
@@ -1556,15 +1544,6 @@ function surveyCard(){
     h("div",{class:"share",style:"margin-top:12px"},
       h("button",{class:"btn ghost",onclick:()=>{S.surveyOpenUI=false;render();}},"סגור"),
       h("button",{class:"btn",onclick:surveyJoin},"המשך לסקר")));
-  const all=(sv.names||[]);
-  if(!all.some(n=>norm(n)===norm(lsGet("myName"))) && lsGet("survNotIn")!==String(sv.round)){
-    const pick=n=>{ if(n){ lsSet("myName",n); saveWho(n); const ph=lsGet("myPhone"); if(ph) savePhone(ph); if(messaging && S.pushState==="on") refreshToken(false); } else lsSet("survNotIn",String(sv.round)); render(); };
-    return h("div",{class:"card surv"},
-      h("h2",null,"⭐ סקר דירוגים"),
-      h("div",{class:"hint"},`רשום אצלך "${lsGet("myName")||"בלי שם"}". איזה מהשמות בסקר הוא אתה? (כדי שלא תדרג את עצמך)`),
-      h("div",{class:"chips",style:"margin-top:10px"},all.slice().sort((a,b)=>a.localeCompare(b,"he")).map(n=>h("button",{class:"chip",onclick:()=>pick(n)},n))),
-      h("div",{class:"winlinks",style:"justify-content:flex-start;margin-top:8px"},h("button",{class:"linkbtn muted",onclick:()=>pick(null)},"אני לא ברשימה")));
-  }
   const me=norm(lsGet("myName")), d=S.voteDraft||(S.voteDraft={});
   const names=(sv.names||[]).filter(n=>norm(n)!==me);
   return h("div",{class:"card surv"},
@@ -1605,21 +1584,14 @@ function surveyAdminCard(){
       return h("div",null,
         h("div",{class:"sub-h"},`✔ ענו (${who.length})`),
         who.length ? h("div",{class:"chips"},who.map(n=>{ const inSv=(sv.names||[]).some(x=>norm(x)===norm(n));
-          return h("button",{class:"chip on"+(inSv?"":" unk")+(S.aliasFor===n?" sel":""),onclick:()=>{ S.aliasFor=S.aliasFor===n?null:n; render(); }},inSv?n:n+" ❔"); })) : h("div",{class:"hint"},"עוד אף אחד"),
-        who.some(n=>!(sv.names||[]).some(x=>norm(x)===norm(n))) && !S.aliasFor ? h("div",{class:"hint",style:"margin-top:4px"},"❔ = שם שלא מופיע בסקר. לחץ עליו כדי לבחור מי זה."): null,
+          return h("button",{class:"chip on"+(S.aliasFor===n?" sel":""),onclick:()=>{ S.aliasFor=S.aliasFor===n?null:n; render(); }},n); })) : h("div",{class:"hint"},"עוד אף אחד"),
         S.aliasFor ? h("div",{class:"aliasbox"},
           ((res&&res.votes)||[]).filter(v=>norm(v.name)===norm(S.aliasFor)).map((v,i,arr)=>h("div",{class:"logp"},
             h("span",{class:"pn"},`🗳️ הצבעה${arr.length>1?" "+(i+1):""}`+(v.at?` · ${fmtTime(v.at)}`:"")+(v.used?"":" (לא נספרת)")),
             h("button",{class:"btn ghost",style:"padding:6px 12px",onclick:async()=>{
               if(!confirm(`למחוק את ההצבעה הזו של ${S.aliasFor}?`)) return;
               await run(()=>deleteDoc(doc(db,"surveyVotes",v.id)),"🗑️ ההצבעה נמחקה"); }},"🗑️ מחק"))),
-          (sv.names||[]).some(x=>norm(x)===norm(S.aliasFor)) ? null : h("div",{class:"hint"},`מי זה "${S.aliasFor}"?`),
-          (sv.names||[]).some(x=>norm(x)===norm(S.aliasFor)) ? null : h("div",{class:"chips"},not.concat((sv.names||[]).filter(n=>!not.includes(n))).map(n=>h("button",{class:"chip",onclick:async()=>{
-            const al={...(sv.alias||{}), [norm(S.aliasFor)]:n}; S.aliasFor=null; render();
-            await run(()=>updateDoc(surveyRef,{alias:al}),`✔ עודכן: ${n}`); }},n)))) : null,
-        open && not.length ? h("div",null,h("div",{class:"sub-h"},`⏳ עוד לא ענו (${not.length})`),h("div",{class:"chips"},not.map(n=>h("span",{class:"chip"},n)))) : null,
-        Object.keys((fresh&&res.dups)||{}).length ? h("div",{class:"hint",style:"margin-top:6px;color:var(--wait)"},
-          "👥 "+Object.entries(res.dups).map(([n,c])=>`${n} ענה מ-${c} מכשירים`).join(" · ")+". נספר רק הדירוג האחרון שלו.") : null,
+          ) : null,
         h("div",{class:"hint"},"רואים רק מי ענה, לא מה הוא דירג. לחץ על שם כדי למחוק לו הצבעה."),
         h("button",{class:"linkbtn",onclick:()=>run(()=>updateDoc(surveyRef,{recalc:Date.now()}),"🔄 התוצאות מחושבות מחדש")},"🔄 חשב תוצאות מחדש")); })(),
     h("div",{class:"paylist"},rows.map(x=>h("div",{class:"payrow"},
@@ -1636,16 +1608,13 @@ function surveyAdminCard(){
 
 // ---------- player login settings ----------
 function loginSettingsCard(){
-  const v=S.phoneV||new Set(), on=!!S.cfg.requireLogin;
+  const v=S.phoneV||new Set();
   const names=[...v].map(uid=>nameOfUid(uid)||"(בלי שם עדיין)").sort((a,b)=>a.localeCompare(b,"he"));
   const reg=S.signups.filter(x=>x.uid && x.id===x.uid && !v.has(x.uid)).map(x=>x.name);
   return h("div",{class:"card"},
     h("h2",null,"🔐 התחברות שחקנים"),
     h("div",{class:"hint"},"שחקן שמתחבר עם הטלפון (קוד ב-SMS) מזוהה בוודאות מכל מכשיר: בהרשמה, בהצבעות, בסקר ובהתראות."),
-    h("div",{class:"seg",style:"margin-top:8px"},
-      h("button",{class:"btn "+(!on?"on":"ghost"),onclick:()=>setCfg({requireLogin:false},"התחברות: רשות")},"רשות"),
-      h("button",{class:"btn "+(on?"on":"ghost"),onclick:()=>setCfg({requireLogin:true},"🔐 מעכשיו צריך להתחבר כדי להירשם ולהצביע")},"חובה")),
-    h("div",{class:"hint",style:"margin-top:6px"}, on ? "חובה: רק מי שהתחבר יכול להירשם, להצביע ולדרג. אתה עדיין יכול להוסיף שחקנים ידנית." : "רשות: כולם מתבקשים להתחבר, אבל אפשר גם בלי. כדאי להשאיר ככה שבוע-שבועיים ואז לעבור לחובה."),
+    h("div",{class:"hint",style:"margin-top:6px"},"שחקנים נרשמים, מצביעים ומדרגים רק אחרי התחברות. אתה (ושאר המנהלים) עדיין יכולים להוסיף שחקנים ידנית."),
     h("div",{class:"sub-h"},`✔ התחברו (${names.length})`),
     names.length ? h("div",{class:"chips"},names.map(n=>h("span",{class:"chip on"},n))) : h("div",{class:"hint"},"עוד אף אחד"),
     reg.length ? h("div",null,h("div",{class:"sub-h"},`⏳ נרשמו השבוע ועוד לא התחברו (${reg.length})`),h("div",{class:"chips"},reg.map(n=>h("span",{class:"chip"},n)))) : null);
@@ -1723,7 +1692,7 @@ function pushLogCard(){
 // ---------- "who are you?" so regulars get their notifications ----------
 // ---------- phone login: one account per player, on every device ----------
 const loggedIn = () => !!S.authPhone;
-const needLogin = () => !!S.cfg.requireLogin && !loggedIn() && !S.isAdmin;
+const needLogin = () => !loggedIn() && !S.isAdmin;
 let recaptcha=null, confirmation=null;
 function recaptchaBox(){
   let el=document.getElementById("recap");
@@ -1829,7 +1798,7 @@ function loginCard(reason){
           h("input",{id:"f_loginPh",type:"tel",inputmode:"tel",autocomplete:"tel",dir:"ltr",placeholder:"050-0000000",value:S.draft.loginPh ?? prettyPhone(lsGet("myPhone")),oninput:e=>{S.draft.loginPh=e.target.value;},onkeydown:e=>{ if(e.key==="Enter") sendCode(); }}),
           h("button",{class:"btn",disabled:!!L.busy,onclick:sendCode},L.busy?"…":"שלח קוד")),
     L.err ? h("div",{class:"hint",style:"direction:ltr;text-align:left;font-size:11px;opacity:.7"},L.err) : null,
-    !S.cfg.requireLogin && L.step!=="code" ? h("button",{class:"linkbtn muted",onclick:()=>{ S.loginLater=true; render(); }},"אחר כך") : null);
+    L.step!=="code" ? h("button",{class:"linkbtn muted",onclick:()=>{ S.loginLater=true; render(); }},"אחר כך") : null);
 }
 function loginNeededToast(){ toast("קודם התחבר עם הטלפון (למעלה)"); S.loginLater=false; S.tab="list"; render(); window.scrollTo({top:0,behavior:"smooth"}); }
 
@@ -1841,7 +1810,7 @@ function saveWho(name){
 }
 // the "who are you / log in" card at the top of the list (and of the teams tab during a vote)
 function whoCard(){
-  if(!S.isAdmin && S.cfgLoaded && S.uid && !S.surveyOpenUI && (!loggedIn() || !lsGet("myName")) && (S.cfg.requireLogin || !S.loginLater)) return loginCard();
+  if(!S.isAdmin && S.cfgLoaded && S.uid && !S.surveyOpenUI && (!loggedIn() || !lsGet("myName")) && !S.loginLater) return loginCard();
   return null;
 }
 
@@ -2019,23 +1988,17 @@ function myCard(){
     return h("div",{class:"card"},h("div",{class:"empty"},"🔒 ההרשמה סגורה כרגע. היא תיפתח בקרוב."),pushBox());
   }
   const full=S.signups.length>=cap;
-  if(needLogin()) return h("div",{class:"card reg"},h("h2",null,"✋ הרשמה למשחק"),S.prioBanner,h("div",{class:"hint"},"🔐 כדי להירשם צריך להתחבר פעם אחת עם הטלפון (בכרטיס למעלה)."),pushBox());
-  if(loggedIn() && lsGet("myName")) return h("div",{class:"card reg"},
+  if(!loggedIn() || !lsGet("myName")) return h("div",{class:"card reg"},h("h2",null,"✋ הרשמה למשחק"),S.prioBanner,
+    h("div",{class:"hint"},"🔐 כדי להירשם צריך להתחבר פעם אחת עם הטלפון."),
+    S.loginLater ? h("button",{class:"btn full",style:"margin-top:8px",onclick:()=>{ S.loginLater=false; render(); window.scrollTo({top:0,behavior:"smooth"}); }},"התחבר עכשיו") : null,
+    pushBox());
+  return h("div",{class:"card reg"},
     h("h2",null, full ? "⏳ הרשמה לרשימת המתנה" : "✋ הרשמה למשחק"),
     S.prioBanner,
     h("button",{class:"btn full big",disabled:S.busy,onclick:()=>selfRegister(lsGet("myName"))}, S.busy?"…":`אני בא! (${lsGet("myName")})`),
     h("div",{class:"hint",style:"margin-top:8px"},"כל הקודם זוכה. אפשר לבטל מכל מכשיר שאתה מחובר בו."),
     pushBox());
-  const inp=h("input",{id:"myName",type:"text",placeholder:"השם שלך",autocomplete:"name",enterkeyhint:"go",value:lsGet("myName"),
-    onkeydown:e=>{ if(e.key==="Enter") selfRegister(e.target.value); }});
-  return h("div",{class:"card reg"},
-    h("h2",null, full ? "⏳ הרשמה לרשימת המתנה" : "✋ הרשמה למשחק"),
-    S.prioBanner,
-    h("div",{class:"addrow"}, inp, h("button",{class:"btn",disabled:S.busy,onclick:()=>selfRegister(inp.value)}, S.busy?"…":"אני בא!")),
-    h("input",{id:"myPhone",type:"tel",class:"phone-in",placeholder:"📱 טלפון (לא חובה, רק המארגן רואה)",autocomplete:"tel",inputmode:"tel",dir:"ltr",
-      value:S.draft.myPhone ?? prettyPhone(lsGet("myPhone")), oninput:e=>{S.draft.myPhone=e.target.value;}}),
-    h("div",{class:"hint",style:"margin-top:8px"},"כל הקודם זוכה. אפשר לבטל מהטלפון הזה בכל זמן."),
-    pushBox());
+  return null;
 }
 
 function guestBox(){
@@ -2591,7 +2554,7 @@ function settingsSummary(title){
   if(title.includes("אנשי קשר")) return `${contactsList().length} טלפונים`;
   if(title.includes("פרטי המשחק")) { const g=game(); return [g.day,g.time].filter(Boolean).join(" ")||"לא הוגדר"; }
   if(title.includes("יומן")) { const l=(S.pushLog||[])[0]; return l?`אחרונה ${fmtTime(l.at)}`:"אין עדיין"; }
-  if(title.includes("התחברות")) return (S.cfg.requireLogin?"חובה":"רשות")+` · ${(S.phoneV||new Set()).size} מחוברים`;
+  if(title.includes("התחברות")) return `${(S.phoneV||new Set()).size} מחוברים`;
   if(title.includes("מי מקבל")) return S.tokens?`${pushPeople().on.length} מכשירים`:"…";
   if(title.includes("התראות")) return ({all:"לכולם",admin:"רק אני",select:"נבחרים"})[c.pushMode||"all"];
   if(title.includes("ביטולים")) return ((c.lockHours||0)?`חסימה ${c.lockHours} ש׳`:"בלי חסימה")+(c.allowGuests===false?" · בלי אורחים":"");
