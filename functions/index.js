@@ -300,8 +300,6 @@ async function autoCloseMvp() {
   if (!ok) return;
   if (winners.length) {
     await db.doc(`history/${M.round}`).set({ at: M.round, mvp: winners.length > 1 ? winners : winners[0] }, { merge: true });
-    const tm = await db.doc("teams/current").get();
-    if (tm.exists && tm.data().at === M.round) await tm.ref.update({ mvp: winners.join(" ו"), mvpOpen: false });
     const toks = await playerTokens((M.names || []).map((n) => ({ name: n })));
     await sendAll(toks.map((x) => ({ ...x, link: APP_URL + "#teams",
       title: "⭐ ה-MVP נבחר!", body: winners.length > 1 ? `תיקו! ${winners.join(" ו")} הם ה-MVP של הערב 👏` : `${winners[0]} הוא ה-MVP של הערב 👏` })));
@@ -363,13 +361,7 @@ exports.onTeamsChange = onDocumentUpdated("teams/current", async (event) => {
     await sendAll(toks.map((t) => ({ ...t, link, title: "🗳️ הצבעה על הכוחות!", body: "אופציה א׳ או אופציה ב׳? היכנס להצביע" })));
   }
 
-  // MVP vote opened
-  if (a.mvpOpen && !b.mvpOpen) {
-    const opt = opts[a.chosen ?? 0] || opts[0];
-    const names = (opt.teams || []).flatMap((t) => (t.players || []).concat(t.subs || []));
-    const toks = await playerTokens(names.map((n) => byName.get(norm(n)) || { name: n }));
-    await sendAll(toks.map((t) => ({ ...t, link, title: "⭐ מי ה-MVP של הערב?", body: "היכנס והצבע לשחקן הטוב ביותר" })));
-  }
+
 });
 
 // ---------- 4. payments ----------
@@ -392,7 +384,7 @@ exports.onPaymentChange = onDocumentWritten("payments/current", async (event) =>
 
   if (a.remindAt && a.remindAt !== b.remindAt) {
     const marks = await db.collection("payMarks").get();
-    const paid = new Set(marks.docs.map((d) => d.id).concat(a.paid || []));
+    const paid = new Set(marks.docs.map((d) => d.id));
     const unpaid = active.filter((s) => !paid.has(s.id) && s.uid !== a.payer.uid);
     const toks = (await playerTokens(unpaid)).filter((t) => t.uid !== a.payer.uid);
     await sendAll(toks.map((t) => ({ ...t,
@@ -493,7 +485,7 @@ exports.makeTeams = onCall(async (req) => {
   const k = Math.min(Number(cfg.numTeams) || 3, active.length);
   const a = buildOption(main, subs, k, apart); let b = null;
   for (let t = 0; t < 60 && !b; t++) { const c = buildOption(main, subs, k, apart); if (canon(c) !== canon(a)) b = c; }
-  const doc = { at: Date.now(), options: b ? [a, b] : [a], status: "draft", chosen: null, mvpOpen: false, mvp: null };
+  const doc = { at: Date.now(), options: b ? [a, b] : [a], status: "draft", chosen: null };
   await db.doc("teams/current").set(doc);
   return { options: doc.options.length, bad: violations(a, apart) + (b ? violations(b, apart) : 0) };
 });

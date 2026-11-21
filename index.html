@@ -368,6 +368,12 @@
   .adminbar{width:100%;display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:right;cursor:pointer}
   .adminbar span{font-weight:700;font-size:16px}
   .adminbar small{color:var(--muted);font-size:12px}
+  .subsec{border-top:1px solid var(--line);padding:8px 0}
+  .subsec:first-of-type{border-top:none}
+  .secsum{cursor:pointer;font-weight:700;font-size:16px;padding:6px 0;list-style:none;display:flex;align-items:center;gap:6px}
+  .secsum::-webkit-details-marker{display:none}
+  .secsum::after{content:"▾";color:var(--muted);font-size:13px;margin-inline-start:auto}
+  details[open] > .secsum::after{content:"▴"}
 </style>
 </head>
 <body>
@@ -407,7 +413,7 @@ const COLORS = [
 const DEF_CFG = {capacity:18, numTeams:3, open:true, colors:[0,1,2,3,4,5,6,7], openAt:null, game:{day:"",time:"",place:""}, price:0, payLink:"", gameAt:null, lockHours:0, allowGuests:true, pushMode:"all", priority:[], prioHours:0, prioOpen:false, requireLogin:false};
 const OPT_NAMES = ["אופציה א׳","אופציה ב׳"];
 const S = {
-  cfg:{...DEF_CFG}, cfgLoaded:false, signups:[], signupsLoaded:false, ratings:[], apart:[], teams:null, votes:[], paid:new Set(), pay:{}, payMarks:{}, history:[], weeks:[], mvpVotes:[], lates:[], phones:{}, pushState:"unknown",
+  cfg:{...DEF_CFG}, cfgLoaded:false, signups:[], signupsLoaded:false, ratings:[], apart:[], teams:null, votes:[], pay:{}, payMarks:{}, history:[], weeks:[], mvpVotes:[], lates:[], phones:{}, pushState:"unknown",
   uid:null, isAdmin:false, isOwner:false, admins:{owner:"",emails:[]}, loading:true, error:null,
   tab: location.hash==="#teams" ? "teams" : location.hash==="#stats" ? "stats" : "list",
   showPaste:false, confirmReset:false, confirmCancel:false, copyText:null, busy:false,
@@ -470,7 +476,6 @@ function colorSlots(k){
   for(let i=0;i<k;i++) if(out[i]==null){ let c=0; while(used.has(c)) c++; out[i]=c%COLORS.length; used.add(c); }
   return out;
 }
-const colorOf = i => COLORS[colorSlots(Math.max(i+1, S.cfg.numTeams))[i]];
 // colors of one option's teams: chosen per option by the organizer, else the default colors
 function optColorSlots(opt){
   const k=(opt&&opt.teams||[]).length, base=colorSlots(Math.max(k,S.cfg.numTeams)).slice(0,k);
@@ -519,7 +524,7 @@ const signCol = collection(db,"signups"), votesCol = collection(db,"votes"), his
 let ratUnsub = null;
 function normTeams(d){
   if(!d) return null;
-  if(Array.isArray(d.options) && d.options.length) return {at:d.at||0, options:d.options, status:d.status||"draft", chosen:d.chosen??null, mvpOpen:!!d.mvpOpen, mvp:d.mvp||null};
+  if(Array.isArray(d.options) && d.options.length) return {at:d.at||0, options:d.options, status:d.status||"draft", chosen:d.chosen??null, mvp:d.mvp||null};
   if(Array.isArray(d.teams) && d.teams.length)
     return {at:d.at||0, options:[{teams:d.teams.map(t=>({players:t.players||[], subs:t.subs||[]}))}], status:"final", chosen:0};
   return null;
@@ -534,7 +539,7 @@ function subscribe(){
     S.signupsLoaded=true; S.loading=false; S.error=null; detectPromotions(); render();
   }, e=>fail(e));
   onSnapshot(votesCol, q=>{ S.votes=q.docs.map(d=>({id:d.id, ...d.data()})); render(); }, e=>console.warn("votes",e));
-  onSnapshot(paidRef, s=>{ const d=s.exists()?s.data():{}; S.pay=d; S.paid=new Set(d.paid||[]); render(); }, e=>console.warn("paid",e));
+  onSnapshot(paidRef, s=>{ const d=s.exists()?s.data():{}; S.pay=d; migrateOldPaid(d); render(); }, e=>console.warn("paid",e));
   onSnapshot(mvpRef, s=>{ S.mvp=s.exists()?s.data():null; render(); }, e=>console.warn("mvp doc",e));
   onSnapshot(prevPayRef, s=>{ S.prevPay=s.exists()?s.data():null; render(); }, e=>console.warn("prevPay",e));
   onSnapshot(collection(db,"prevMarks"), q=>{ const m={}; q.docs.forEach(d=>{ m[d.id]=d.data(); }); S.prevMarks=m; render(); }, e=>console.warn("prevMarks",e));
@@ -830,7 +835,15 @@ function removeApart(i){ S.apart=S.apart.filter((_,j)=>j!==i); render(); run(()=
 // ---------- payments ----------
 const PAY_ICON={bit:"💳",cash:"💵",admin:"✅",payer:"🏟️"};
 const PAY_TXT={bit:"שילם בביט",cash:"הביא מזומן",admin:"סומן ששילם",payer:"שילם על המגרש"};
-function payMark(id){ return S.payMarks[id] || (S.paid.has(id)?{m:"admin"}:null); }
+function payMark(id){ return S.payMarks[id] || null; }
+// payments made before "marks" existed kept an id list; turn it into marks once (organizer's device)
+function migrateOldPaid(d){
+  if(!S.isAdmin || !Array.isArray(d.paid) || !d.paid.length) return;
+  const batch=writeBatch(db);
+  d.paid.forEach(id=>{ if(!S.payMarks[id]) batch.set(doc(db,"payMarks",id),{m:"admin", by:S.uid||"", at:Date.now()}); });
+  batch.update(paidRef,{paid:[]});
+  batch.commit().catch(e=>console.warn("migrate paid",e));
+}
 const payActive = () => !!(S.pay && S.pay.payer);
 const payPrice = () => Number((S.pay&&S.pay.price) || S.cfg.price || 0);
 // the player who paid for the pitch: same device, or the same logged-in player on another device
@@ -839,7 +852,6 @@ function activeList(){ return S.signups.slice(0,S.cfg.capacity); }
 async function setMark(id, m){
   const ref=doc(db,"payMarks",id);
   if(!m){ const prev=S.payMarks[id]; const next={...S.payMarks}; delete next[id]; S.payMarks=next;
-    if(S.paid.has(id)){ const p=new Set(S.paid); p.delete(id); S.paid=p; run(()=>updateDoc(paidRef,{paid:[...p]})); }
     render(); return run(()=>deleteDoc(ref), prev?"הסימון בוטל":null); }
   S.payMarks={...S.payMarks,[id]:{m,by:S.uid,at:Date.now()}}; render();
   return run(()=>setDoc(ref,{m, by:S.uid||"", at:Date.now()}));
@@ -885,7 +897,7 @@ async function newWeek(){
   }
   S.signups.forEach(s=>batch.delete(doc(db,"signups",s.id)));
   S.votes.forEach(v=>batch.delete(doc(db,"votes",v.id)));
-  batch.set(teamsRef,{options:[],at:0,status:"draft",chosen:null,mvpOpen:false,mvp:null});
+  batch.set(teamsRef,{options:[],at:0,status:"draft",chosen:null});
   // last week's marks/request are replaced
   Object.keys(S.prevMarks||{}).forEach(id=>batch.delete(doc(db,"prevMarks",id)));
   if(payActive() && played.some(s=>!payMark(s.id) && !(S.pay.payer&&S.pay.payer.id===s.id))){
@@ -1037,7 +1049,6 @@ async function finalizeMvp(winners){
   await run(()=>setDoc(mvpRef,{...M, open:false, winners}));
   const val=winners.length>1?winners:(winners[0]||null);
   await run(()=>setDoc(doc(db,"history",String(M.round)),{at:M.round, mvp:val},{merge:true}), winners.length?`⭐ ${joinNames(winners)} ${winners.length>1?"הם":"הוא"} ה-MVP!`:"ההצבעה נסגרה");
-  if(S.teams && S.teams.at===M.round) run(()=>updateDoc(teamsRef,{mvp:joinNames(winners)||null, mvpOpen:false}));
 }
 async function setMvp(name){ await finalizeMvp([name]); }
 function mvpTally(){
@@ -1680,6 +1691,23 @@ function surveyAdminCard(){
 }
 
 // ---------- player login settings ----------
+// one tile for players' accounts and devices: logins, notifications, and the notification log
+function asSection(card, open){
+  if(!card) return null;
+  const t=card.querySelector("h2"); const sum=h("summary",{class:"secsum"}); if(t){ sum.append(...t.childNodes); t.remove(); }
+  const key=sum.textContent.trim().slice(0,20); S.secOpen=S.secOpen||{};
+  const d=h("details",{class:"subsec"}); d.open = key in S.secOpen ? S.secOpen[key] : !!open;
+  d.addEventListener("toggle",()=>{ S.secOpen[key]=d.open; });
+  card.classList.remove("card"); d.append(sum, card);
+  return d;
+}
+function playersDevicesCard(){
+  return h("div",{class:"card"},
+    h("h2",null,"👥 שחקנים ומכשירים"),
+    asSection(loginSettingsCard(), true),
+    S.isOwner ? asSection(pushPeopleCard(), false) : null,
+    S.isOwner ? asSection(pushLogCard(), false) : null);
+}
 function loginSettingsCard(){
   const v=S.phoneV||new Set();
   const accts=[...v].map(uid=>({uid, n:nameOfUid(uid)})).sort((a,b)=>(a.n||"תתת").localeCompare(b.n||"תתת","he"));
@@ -2848,6 +2876,7 @@ function settingsSummary(title){
   if(title.includes("מנהלים")) return `${(S.admins.emails||[]).length+1} מנהלים`;
   if(title.includes("אנשי קשר")) return `${contactsList().length} טלפונים`;
   if(title.includes("פרטי המשחק")) { const g=game(); return [g.day,g.time].filter(Boolean).join(" ")||"לא הוגדר"; }
+  if(title.includes("שחקנים ומכשירים")) return `${(S.phoneV||new Set()).size} מחוברים`+(S.isOwner&&S.tokens?` · ${pushPeople().on.length} מקבלים התראות`:"");
   if(title.includes("יומן")) { const l=(S.pushLog||[])[0]; return l?`אחרונה ${fmtTime(l.at)}`:"אין עדיין"; }
   if(title.includes("התחברות")) return `${(S.phoneV||new Set()).size} מחוברים`;
   if(title.includes("מי מקבל")) return S.tokens?`${pushPeople().on.length} מכשירים`:"…";
@@ -2954,9 +2983,7 @@ function settingsCards(){
     prioCard(),
     S.isOwner ? adminsCard() : null,
     S.isOwner ? surveyAdminCard() : null,
-    loginSettingsCard(),
-    S.isOwner ? pushPeopleCard() : null,
-    S.isOwner ? pushLogCard() : null,
+    playersDevicesCard(),
     apartCard(),
     h("div",{class:"card"},
       h("h2",null,"📍 פרטי המשחק"),
