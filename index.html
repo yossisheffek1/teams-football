@@ -2164,10 +2164,20 @@ function optionBlock(opt, idx, mode){
     S.isAdmin ? swapHint(idx) : null,
     h("div",{class:"teams"},opt.teams.map((tm,i)=>teamCard(tm,i,S.isOwner,opt,idx))),
     mode==="vote" ? h("button",{class:"btn full big"+(mine?" chosen":""),style:"margin-top:10px",onclick:()=>vote(idx)}, mine?`✔ הצבעת ל${OPT_NAMES[idx]}`:`אני בעד ${OPT_NAMES[idx]}`) : null,
+    // an organizer who plays votes too (with the name he has on the list)
+    mode==="admin" && voting ? h("button",{class:"btn ghost full"+(mine?" chosen":""),style:"margin-top:10px",onclick:()=>adminVote(idx)}, mine?`✔ הצבעת ל${OPT_NAMES[idx]}`:`🙋 גם אני משחק: אני בעד ${OPT_NAMES[idx]}`) : null,
+    mode==="admin" && voting && S.adminVotePick===idx ? h("div",{class:"aliasbox"},
+      h("div",{class:"hint"},"מה השם שלך ברשימה? (פעם אחת)"),
+      h("div",{class:"chips"},S.signups.slice(0,S.cfg.capacity).filter(x=>!x.guestOf).map(x=>h("button",{class:"chip",onclick:()=>{ lsSet("myName",x.name); saveWho(x.name); S.adminVotePick=null; adminVote(idx); }},x.name)))) : null,
     mode==="admin" ? h("div",null,
       h("div",{class:"hint",style:"margin-top:10px"}, S.teams.options.length>1 ? "שליחת האופציה הזו בנפרד:" : "שליחה:"),
       imageShare("opt"+idx, optionText(idx)),
       h("button",{class:"btn full",style:"margin-top:8px",onclick:()=>setStatus("final",idx)}, S.teams.options.length>1?`✔ קבע את ${OPT_NAMES[idx]}`:"✔ קבע את החלוקה")) : null);
+}
+function adminVote(idx){
+  if(!lsGet("myName")){ S.adminVotePick=idx; render(); return; }
+  saveWho(lsGet("myName"));
+  vote(idx);
 }
 function splitControls(){
   const cap=S.cfg.capacity, active=S.signups.slice(0,cap), waiting=S.signups.slice(cap);
