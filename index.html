@@ -568,7 +568,10 @@ async function checkAdmin(user){
     registerAdminDevice();
     onSnapshot(testRef, s=>{ S.pushTest = s.exists()?s.data():{uids:[],names:[]}; render(); }, ()=>{});
     onSnapshot(collection(db,"who"), q=>{ const m={}; q.docs.forEach(d=>{ if(d.data().name) m[d.id]=d.data().name; }); S.whoMap=m; render(); }, ()=>{});
-    onSnapshot(collection(db,"phones"), q=>{ const m={}, n={}; const v=new Set(); q.docs.forEach(d=>{ m[d.id]=d.data().phone; if(d.data().name) n[d.id]=d.data().name; if(d.data().v) v.add(d.id); }); S.phones=m; S.phoneNames=n; S.phoneV=v; render(); }, ()=>{});
+    // a listener stops for good after an error (e.g. while new rules are being published): try again
+    const listenPhones=(tries)=>onSnapshot(collection(db,"phones"), q=>{ const m={}, n={}; const v=new Set(); q.docs.forEach(d=>{ m[d.id]=d.data().phone; if(d.data().name) n[d.id]=d.data().name; if(d.data().v) v.add(d.id); }); S.phones=m; S.phoneNames=n; S.phoneV=v; S.phonesErr=null; render(); },
+      e=>{ console.warn("phones",e); S.phonesErr=String(e&&e.code||e); render(); if(tries<5) setTimeout(()=>listenPhones(tries+1), 3000*(tries+1)); });
+    listenPhones(0);
     onSnapshot(collection(db,"weeks"), q=>{ S.weeks=q.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(a.date||a.at)-(b.date||b.at)); render(); }, ()=>{});
     onSnapshot(latesRef, s=>{ S.lates = s.exists() ? (s.data().list||[]) : []; render(); }, ()=>{});
     try{ const c=await getDoc(cfgRef); if(!c.exists()) await setDoc(cfgRef, DEF_CFG); }catch(e){}
@@ -1635,6 +1638,7 @@ function loginSettingsCard(){
     h("div",{class:"hint"},"שחקן שמתחבר עם הטלפון (קוד ב-SMS) מזוהה בוודאות מכל מכשיר: בהרשמה, בהצבעות, בסקר ובהתראות."),
     h("div",{class:"hint",style:"margin-top:6px"},"שחקנים נרשמים, מצביעים ומדרגים רק אחרי התחברות. אתה (ושאר המנהלים) עדיין יכולים להוסיף שחקנים ידנית."),
     S.isAdmin && !loggedIn() ? h("button",{class:"btn ghost full",style:"margin-top:8px",onclick:()=>{ S.admLinkLater=false; S.tab="list"; render(); window.scrollTo({top:0,behavior:"smooth"}); }},"📱 חבר גם את הטלפון שלי") : null,
+    S.phonesErr ? h("div",{class:"stale"},`⚠️ לא הצלחתי לקרוא את רשימת המחוברים (${S.phonesErr}). סגור ופתח את האפליקציה.`) : null,
     h("div",{class:"sub-h"},`✔ התחברו (${names.length})`),
     accts.length ? h("div",{class:"chips"},accts.map(a=>h("button",{class:"chip on"+(S.renameUid===a.uid?" sel":""),onclick:()=>{ S.renameUid=S.renameUid===a.uid?null:a.uid; delete S.draft.whoQ; delete S.draft.whoOtherName; render(); }},a.n||"(בלי שם עדיין)"))) : h("div",{class:"hint"},"עוד אף אחד"),
     accts.length && !S.renameUid ? h("div",{class:"hint",style:"margin-top:4px"},"שם לא נכון (למשל רק שם משפחה)? לחץ עליו ובחר את השם הנכון.") : null,
