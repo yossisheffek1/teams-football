@@ -567,6 +567,7 @@ async function checkAdmin(user){
     ownerUnsub = onSnapshot(ownerRef, s=>{ const d=s.exists()?s.data():{}; S.admins={owner:d.owner||"", emails:d.emails||[]}; render(); }, ()=>{});
     registerAdminDevice();
     onSnapshot(testRef, s=>{ S.pushTest = s.exists()?s.data():{uids:[],names:[]}; render(); }, ()=>{});
+    onSnapshot(collection(db,"who"), q=>{ const m={}; q.docs.forEach(d=>{ if(d.data().name) m[d.id]=d.data().name; }); S.whoMap=m; render(); }, ()=>{});
     onSnapshot(collection(db,"phones"), q=>{ const m={}, n={}; q.docs.forEach(d=>{ m[d.id]=d.data().phone; if(d.data().name) n[d.id]=d.data().name; }); S.phones=m; S.phoneNames=n; render(); }, ()=>{});
     onSnapshot(collection(db,"weeks"), q=>{ S.weeks=q.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(a.date||a.at)-(b.date||b.at)); render(); }, ()=>{});
     onSnapshot(latesRef, s=>{ S.lates = s.exists() ? (s.data().list||[]) : []; render(); }, ()=>{});
@@ -577,7 +578,7 @@ async function checkAdmin(user){
 onAuthStateChanged(auth, async user=>{
   if(!user){ try{ await signInAnonymously(auth); }catch(e){ fail(e); } return; }
   const first=!S.uid; S.uid = user.uid;
-  if(first){ initPush(); if(user.isAnonymous) backfillPhoneName(); }
+  if(first){ initPush(); if(user.isAnonymous){ backfillPhoneName(); if(lsGet("myName")) saveWho(lsGet("myName")); } }
   getDoc(doc(db,"surveyVotes",user.uid)).then(d=>{ S.myVote = d.exists()?d.data():null; render(); }).catch(()=>{});
   await checkAdmin(user);
 });
@@ -635,7 +636,7 @@ async function selfRegister(name){
     if(!isPrio(name)){ toast(S.cfg.openAt?`כרגע רק לקבועים. ההרשמה לכולם תיפתח ${fmtFull(S.cfg.openAt)}`:"כרגע ההרשמה פתוחה רק לקבועים"); return; }
   }
   if(!S.uid){ toast("רגע, מתחבר…"); return; }
-  lsSet("myName", name);
+  lsSet("myName", name); saveWho(name);
   S.busy=true; render();
   await run(()=>setDoc(doc(db,"signups",S.uid), {name, ts:serverTimestamp(), uid:S.uid}));
   const ph=normPhone(S.draft.myPhone ?? lsGet("myPhone"));
@@ -686,6 +687,7 @@ async function voteMvp(name){
 // name behind a device id: own signup, saved phone/name, or notification name
 function nameOfUid(uid){
   const su=S.signups.find(x=>x.uid===uid && x.id===uid); if(su) return su.name;
+  if((S.whoMap||{})[uid]) return S.whoMap[uid];
   if((S.phoneNames||{})[uid]) return S.phoneNames[uid];
   const t=(S.tokens||[]).find(x=>x.uid===uid && x.name); if(t) return t.name;
   return "";
@@ -1532,7 +1534,7 @@ async function surveyJoin(){
   if(!name){ toast("כתוב את השם שלך"); return; }
   if(!ph){ toast("כתוב מספר טלפון תקין"); return; }
   if(!S.uid){ toast("רגע, מתחבר…"); return; }
-  lsSet("myName",name); lsSet("myPhone",ph);
+  lsSet("myName",name); lsSet("myPhone",ph); saveWho(name);
   const ok=await run(()=>setDoc(doc(db,"phones",S.uid),{phone:ph, name}));
   if(ok){ lsSet("phoneSaved",ph); lsSet("phoneNamed",name); delete S.draft.survMe; delete S.draft.survPh; S.survGate=false; toast(`✔ נשמר: ${name}`); render(); if(messaging && S.pushState==="on") refreshToken(false); }
 }
@@ -1551,7 +1553,7 @@ function surveyCard(){
       h("button",{class:"btn",onclick:surveyJoin},"המשך לסקר")));
   const all=(sv.names||[]);
   if(!all.some(n=>norm(n)===norm(lsGet("myName"))) && lsGet("survNotIn")!==String(sv.round)){
-    const pick=n=>{ if(n){ lsSet("myName",n); const ph=lsGet("myPhone"); if(ph) savePhone(ph); if(messaging && S.pushState==="on") refreshToken(false); } else lsSet("survNotIn",String(sv.round)); render(); };
+    const pick=n=>{ if(n){ lsSet("myName",n); saveWho(n); const ph=lsGet("myPhone"); if(ph) savePhone(ph); if(messaging && S.pushState==="on") refreshToken(false); } else lsSet("survNotIn",String(sv.round)); render(); };
     return h("div",{class:"card surv"},
       h("h2",null,"⭐ סקר דירוגים"),
       h("div",{class:"hint"},`רשום אצלך "${lsGet("myName")||"בלי שם"}". איזה מהשמות בסקר הוא אתה? (כדי שלא תדרג את עצמך)`),
@@ -1631,7 +1633,7 @@ function surveyAdminCard(){
 function pushPeople(){
   const toks=S.tokens||[], byUid=new Set(toks.map(t=>t.uid));
   const nameOf=uid=>{ const t=toks.find(x=>x.uid===uid); const s=S.signups.find(x=>x.uid===uid && x.id===uid);
-    return (t&&t.name) || (S.phoneNames||{})[uid] || (s&&s.name) || ""; };
+    return (t&&t.name) || (S.whoMap||{})[uid] || (S.phoneNames||{})[uid] || (s&&s.name) || ""; };
   const on=toks.map(t=>({uid:t.uid, name:nameOf(t.uid)})).sort((a,b)=>(a.name||"תתת").localeCompare(b.name||"תתת","he"));
   const off=S.signups.filter(s=>s.uid && s.id===s.uid && !byUid.has(s.uid)).map(s=>s.name);
   return {on, off};
@@ -1697,29 +1699,42 @@ function pushLogCard(){
 }
 
 // ---------- "who are you?" so regulars get their notifications ----------
+// every device says once who it is, so votes/notifications from Safari, WhatsApp or the home-screen app all have a name
+function saveWho(name){
+  name=clean(name); if(!name || !S.uid) return;
+  if(lsGet("whoSaved")===S.uid+"|"+name) return;
+  setDoc(doc(db,"who",S.uid),{name, at:Date.now()}).then(()=>lsSet("whoSaved",S.uid+"|"+name)).catch(e=>console.warn("who",e));
+}
 function whoNeeded(){
-  if(S.isAdmin || !S.cfgLoaded || lsGet("whoDone")) return false;
-  const pr=(S.cfg.priority||[]); if(!pr.length) return false;
+  if(S.isAdmin || !S.cfgLoaded || !S.uid || S.whoLater || S.surveyOpenUI) return false;   // the survey asks for a name itself
   const me=norm(lsGet("myName"));
-  return !pr.some(n=>norm(n)===me);
+  if(!me) return true;                                   // a device with no name at all
+  const pr=(S.cfg.priority||[]); if(!pr.length || lsGet("whoDone")) return false;
+  return !pr.some(n=>norm(n)===me);                      // has a name, but not as it appears among the regulars
 }
 function whoPick(name){
   lsSet("whoDone","1");
-  if(name){ lsSet("myName",name); const ph=lsGet("myPhone"); if(ph) savePhone(ph); if(messaging && S.pushState==="on") refreshToken(false); toast(`✔ שלום ${name}!`); }
-  S.whoOpen=false; render();
+  if(name){ name=clean(name); lsSet("myName",name); saveWho(name); const ph=lsGet("myPhone"); if(ph) savePhone(ph); if(messaging && S.pushState==="on") refreshToken(false); toast(`✔ שלום ${name}!`); }
+  S.whoOther=false; delete S.draft.whoOtherName; render();
 }
 function whoCard(){
   if(!whoNeeded()) return null;
-  const hidden=new Set((S.cfg.hiddenNames||[]).map(norm));
-  const names=(S.cfg.priority||[]).filter(n=>!hidden.has(norm(n))).slice().sort((a,b)=>a.localeCompare(b,"he"));
+  const hidden=new Set((S.cfg.hiddenNames||[]).map(norm)), seen=new Set(), names=[];
+  (S.cfg.priority||[]).concat(S.signups.filter(x=>!x.guestOf).map(x=>x.name)).forEach(n=>{ const k=norm(n); if(n && !hidden.has(k) && !seen.has(k)){ seen.add(k); names.push(n); } });
+  names.sort((a,b)=>a.localeCompare(b,"he"));
   const q=norm(S.draft.whoQ||""), shown=q?names.filter(n=>norm(n).includes(q)):names;
+  const noName=!lsGet("myName");
   return h("div",{class:"card surv"},
     h("h2",null,"👋 מי אתה?"),
-    h("div",{class:"hint"},"בחר את השם שלך כדי שהאפליקציה תזהה אותך ותקבל התראות (למשל כשההרשמה נפתחת לקבועים)."),
+    h("div",{class:"hint"},"בחר את השם שלך פעם אחת, כדי שהאפליקציה תזהה אותך: בהצבעות, בסקרים ובהתראות."),
     names.length>12 ? h("input",{id:"f_whoQ",type:"text",class:"phone-in",placeholder:"🔍 חפש את השם שלך",value:S.draft.whoQ||"",oninput:e=>{ S.draft.whoQ=e.target.value; render(); const el=document.getElementById("f_whoQ"); if(el){ el.focus(); el.setSelectionRange(el.value.length,el.value.length); } }}) : null,
     h("div",{class:"chips",style:"margin-top:10px"},shown.map(n=>h("button",{class:"chip",onclick:()=>whoPick(n)},n))),
+    S.whoOther ? h("div",{class:"addrow",style:"margin-top:10px"},
+      h("input",{id:"f_whoOther",type:"text",placeholder:"השם שלך (שם ושם משפחה)",value:S.draft.whoOtherName||"",oninput:e=>{S.draft.whoOtherName=e.target.value;}}),
+      h("button",{class:"btn",onclick:()=>{ const n=clean(S.draft.whoOtherName||""); if(!n){ toast("כתוב את השם שלך"); return; } whoPick(n); }},"שמור")) : null,
     h("div",{class:"winlinks",style:"justify-content:flex-start;margin-top:8px"},
-      h("button",{class:"linkbtn muted",onclick:()=>whoPick(null)},"אני לא ברשימה")));
+      S.whoOther ? null : h("button",{class:"linkbtn",onclick:()=>{ S.whoOther=true; render(); }},"השם שלי לא ברשימה"),
+      noName ? h("button",{class:"linkbtn muted",onclick:()=>{ S.whoLater=true; render(); }},"אחר כך") : h("button",{class:"linkbtn muted",onclick:()=>whoPick(null)},"אני לא קבוע")));
 }
 
 // ---------- render ----------
@@ -2132,6 +2147,7 @@ function mvpCard(opt){
 function viewTeams(){
   const out=[], T=S.teams, cap=S.cfg.capacity, active=S.signups.slice(0,cap);
   if(S.isAdmin) out.push(splitControls());
+  else if(T && (T.status==="voting" || T.mvpOpen)) out.push(whoCard());
   const visible = T && (S.isAdmin || T.status!=="draft");
   if(!visible){ out.push(h("div",{class:"card"},h("div",{class:"empty"},"הכוחות עוד לא חולקו השבוע"))); return out; }
 

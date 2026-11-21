@@ -93,8 +93,9 @@ async function applyMode(msgs) {
 
 // names for a set of player ids (for the delivery log)
 async function namesFor() {
-  const [t, p, s] = await Promise.all([db.collection("tokens").get(), db.collection("phones").get(), db.collection("signups").get()]);
+  const [t, p, s, w] = await Promise.all([db.collection("tokens").get(), db.collection("phones").get(), db.collection("signups").get(), db.collection("who").get()]);
   const m = new Map();
+  w.docs.forEach((d) => { if (d.data().name) m.set(d.id, d.data().name); });
   s.docs.forEach((d) => { const x = d.data(); if (x.uid && !x.guestOf && x.name && d.id === x.uid) m.set(x.uid, x.name); });
   p.docs.forEach((d) => { if (d.data().name) m.set(d.id, d.data().name); });
   t.docs.forEach((d) => { if (d.data().name) m.set(d.id, d.data().name); });
@@ -226,10 +227,11 @@ async function announceOpen(cfg, key) {
 async function prioTokens(cfg) {
   const prio = new Set((cfg.priority || []).map(norm));
   if (!prio.size) return [];
-  const [tsnap, psnap, signups] = await Promise.all([db.collection("tokens").get(), db.collection("phones").get(), getSignups()]);
+  const [tsnap, psnap, signups, wsnap] = await Promise.all([db.collection("tokens").get(), db.collection("phones").get(), getSignups(), db.collection("who").get()]);
   const nameOf = new Map();
   signups.forEach((s) => { if (s.uid && !s.guestOf && s.name) nameOf.set(s.uid, s.name); });
   psnap.docs.forEach((d) => { if (d.data().name) nameOf.set(d.id, d.data().name); });
+  wsnap.docs.forEach((d) => { if (d.data().name) nameOf.set(d.id, d.data().name); });
   return tsnap.docs.filter((d) => d.data().token)
     .filter((d) => prio.has(norm(d.data().name || nameOf.get(d.id) || "")))
     .map((d) => ({ uid: d.id, token: d.data().token, ref: d.ref, name: d.data().name || nameOf.get(d.id) || "" }));
@@ -480,8 +482,8 @@ async function aggregateSurvey() {
   // who each voter is (name as he wrote it, mapped by the organizer's aliases to a survey name)
   const voterName = {};
   for (const d of snap.docs) {
-    const [p, su, t] = await Promise.all([db.doc(`phones/${d.id}`).get(), db.doc(`signups/${d.id}`).get(), db.doc(`tokens/${d.id}`).get()]);
-    let name = (p.exists && p.data().name) || (su.exists && su.data().name) || (t.exists && t.data().name) || "";
+    const [p, su, t, w] = await Promise.all([db.doc(`phones/${d.id}`).get(), db.doc(`signups/${d.id}`).get(), db.doc(`tokens/${d.id}`).get(), db.doc(`who/${d.id}`).get()]);
+    let name = (w.exists && w.data().name) || (p.exists && p.data().name) || (su.exists && su.data().name) || (t.exists && t.data().name) || "";
     if (!name) {
       const q = await db.collection("signups").where("uid", "==", d.id).get();
       const own = q.docs.find((x) => !x.data().guestOf);
@@ -519,6 +521,10 @@ async function aggregateSurvey() {
 }
 exports.onSurveyVote = onDocumentWritten("surveyVotes/{id}", aggregateSurvey);
 // a voter who adds his name later: refresh the "who answered" list
+exports.onWhoForSurvey = onDocumentWritten("who/{id}", async (event) => {
+  const v = await db.doc(`surveyVotes/${event.params.id}`).get();
+  if (v.exists) await aggregateSurvey();
+});
 exports.onPhoneForSurvey = onDocumentWritten("phones/{id}", async (event) => {
   const v = await db.doc(`surveyVotes/${event.params.id}`).get();
   if (v.exists) await aggregateSurvey();
