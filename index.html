@@ -683,6 +683,23 @@ async function voteMvp(name){
   if(!S.teams||!S.teams.mvpOpen||!S.uid) return;
   await run(()=>setDoc(doc(db,"mvpVotes",S.uid),{name, round:S.teams.at}), `הצבעת ל${name} ⭐`);
 }
+// name behind a device id: own signup, saved phone/name, or notification name
+function nameOfUid(uid){
+  const su=S.signups.find(x=>x.uid===uid && x.id===uid); if(su) return su.name;
+  if((S.phoneNames||{})[uid]) return S.phoneNames[uid];
+  const t=(S.tokens||[]).find(x=>x.uid===uid && x.name); if(t) return t.name;
+  return "";
+}
+function votersBox(votes){
+  const names=votes.map(v=>nameOfUid(v.id)), known=names.filter(Boolean), unknown=names.length-known.length;
+  const ks=new Set(known.map(norm));
+  const not=S.signups.slice(0,S.cfg.capacity).filter(s=>!ks.has(norm(s.name))).map(s=>s.name);
+  return h("div",null,
+    h("div",{class:"sub-h"},`✔ הצביעו (${votes.length})`),
+    known.length ? h("div",{class:"chips"},known.sort((a,b)=>a.localeCompare(b,"he")).map(n=>h("span",{class:"chip on"},n))) : (votes.length?null:h("div",{class:"hint"},"עוד אף אחד")),
+    unknown ? h("div",{class:"hint",style:"margin-top:4px"},`+ ${unknown} בלי שם (לא נרשמו מהמכשיר שלהם)`) : null,
+    not.length ? h("div",null,h("div",{class:"sub-h"},`⏳ ברשימה ועוד לא הצביעו (${not.length})`),h("div",{class:"chips"},not.map(n=>h("span",{class:"chip"},n)))) : null);
+}
 function roundVotes(){ return S.teams ? S.votes.filter(v=>v.round===S.teams.at && (v.choice===0||v.choice===1)) : []; }
 function myVote(){ const v=roundVotes().find(v=>v.id===S.uid); return v ? v.choice : null; }
 async function vote(choice){
@@ -2095,6 +2112,7 @@ function mvpCard(opt){
       return h("div",{class:"card mvpc"},
         h("h2",null,"⭐ הצבעת MVP",h("span",{class:"count"},`${mvpRoundVotes().length} הצביעו`)),
         h("div",{class:"hint"},"לחץ על שם כדי לבחור ידנית, או סגור והכרז על המנצח."),
+        votersBox(mvpRoundVotes()),
         h("div",{class:"chips"},names.slice().sort((a,b)=>(cnt.get(b)||0)-(cnt.get(a)||0)).map(n=>h("button",{class:"chip",onclick:()=>setMvp(n)},`${n}${cnt.get(n)?` · ${cnt.get(n)}`:""}`))),
         h("div",{class:"hint",style:"margin-top:10px"},"שלח לקבוצה קישור להצבעה:"),
         shareRow(mvpCallText()),
@@ -2146,6 +2164,7 @@ function viewTeams(){
     T.options.forEach((o,i)=>out.push(optionBlock(o,i, S.isAdmin?"admin":"vote")));
     if(S.isAdmin) out.push(h("div",{class:"card"},
       h("h2",null,"🗳️ ניהול ההצבעה"),
+      votersBox(v),
       h("div",{class:"hint"},"1. שלח לקבוצה תמונה של שתי האופציות:"),
       imageShare("vote", null),
       h("div",{class:"hint",style:"margin-top:12px"},"2. שלח את הקישור להצבעה:"),
