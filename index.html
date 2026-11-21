@@ -1625,7 +1625,9 @@ function surveyAdminCard(){
 function loginSettingsCard(){
   const v=S.phoneV||new Set();
   const names=[...v].map(uid=>nameOfUid(uid)||"(בלי שם עדיין)").sort((a,b)=>a.localeCompare(b,"he"));
-  const reg=S.signups.filter(x=>x.uid && x.id===x.uid && !v.has(x.uid)).map(x=>x.name);
+  // signed up from a device that isn't logged in, and hasn't logged in anywhere else under that name either
+  const logged=new Set(names.map(norm));
+  const reg=S.signups.filter(x=>x.uid && x.id===x.uid && !v.has(x.uid) && !logged.has(norm(x.name))).map(x=>x.name);
   return h("div",{class:"card"},
     h("h2",null,"🔐 התחברות שחקנים"),
     h("div",{class:"hint"},"שחקן שמתחבר עם הטלפון (קוד ב-SMS) מזוהה בוודאות מכל מכשיר: בהרשמה, בהצבעות, בסקר ובהתראות."),
