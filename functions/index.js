@@ -610,3 +610,46 @@ exports.phoneStatus = onCall(async (req) => {
   try { await getAuth().getUserByPhoneNumber("+" + phone); return { exists: true }; }
   catch (e) { return { exists: false }; }
 });
+
+// ---------- organizer: put his SMS-verified phone on his Google account ----------
+// "proof" is the ID token of a phone sign-in the organizer just did (SMS code), which shows he owns the number.
+// If that number already had its own player account, its data moves to the organizer's account and it is removed.
+exports.adoptPhone = onCall(async (req) => {
+  if (!(await isOrganizer(req))) throw new HttpsError("permission-denied", "not an organizer");
+  const me = req.auth.uid;
+  let dec;
+  try { dec = await getAuth().verifyIdToken(String((req.data && req.data.proof) || "")); }
+  catch (e) { throw new HttpsError("invalid-argument", "bad proof"); }
+  const e164 = dec.phone_number;
+  if (!e164) throw new HttpsError("invalid-argument", "no phone in proof");
+  const other = dec.uid;
+  if (other !== me) {
+    const ou = await getAuth().getUser(other);
+    if ((ou.providerData || []).some((p) => p.providerId !== "phone")) throw new HttpsError("failed-precondition", "phone belongs to another organizer account");
+    // move the player's things from the phone-only account to the organizer's
+    const moves = [["who", other, me], ["votes", other, me], ["mvpVotes", other, me], ["surveyVotes", other, me], ["payMarks", other, me]];
+    for (const [col, from, to] of moves) {
+      const a = await db.doc(`${col}/${from}`).get();
+      if (a.exists) { const b = await db.doc(`${col}/${to}`).get(); if (!b.exists) await db.doc(`${col}/${to}`).set(a.data()); await a.ref.delete(); }
+    }
+    const su = await db.doc(`signups/${other}`).get();
+    if (su.exists && !(await db.doc(`signups/${me}`).get()).exists) { await db.doc(`signups/${me}`).set({ ...su.data(), uid: me }); await su.ref.delete(); }
+    const g = await db.doc(`signups/${other}_g`).get();
+    if (g.exists && !(await db.doc(`signups/${me}_g`).get()).exists) { await db.doc(`signups/${me}_g`).set({ ...g.data(), uid: me, guestOf: me }); await g.ref.delete(); }
+    await db.doc(`phones/${other}`).delete().catch(() => {});
+    await db.doc(`tokens/${other}`).delete().catch(() => {});
+    await getAuth().deleteUser(other);
+  }
+  await getAuth().updateUser(me, { phoneNumber: e164 });
+  // name: organizer's contacts, earlier sign-ups with that phone, or what he chose before
+  const phone = normPhoneIL(e164);
+  let name = "";
+  const rd = await db.doc("ratings/main").get();
+  const hit = ((rd.exists && rd.data().list) || []).find((x) => x && x.phone && normPhoneIL(x.phone) === phone);
+  if (hit) name = hit.n;
+  if (!name) { const w = await db.doc(`who/${me}`).get(); if (w.exists && w.data().name) name = w.data().name; }
+  if (!name) { const ps = await db.collection("phones").where("phone", "==", phone).get(); const o = ps.docs.find((d) => d.data().name); if (o) name = o.data().name; }
+  await db.doc(`phones/${me}`).set(name ? { phone, name, v: true } : { phone, v: true }, { merge: true });
+  if (name) await db.doc(`who/${me}`).set({ name, at: Date.now() });
+  return { name };
+});

@@ -1630,6 +1630,7 @@ function loginSettingsCard(){
     h("h2",null,"🔐 התחברות שחקנים"),
     h("div",{class:"hint"},"שחקן שמתחבר עם הטלפון (קוד ב-SMS) מזוהה בוודאות מכל מכשיר: בהרשמה, בהצבעות, בסקר ובהתראות."),
     h("div",{class:"hint",style:"margin-top:6px"},"שחקנים נרשמים, מצביעים ומדרגים רק אחרי התחברות. אתה (ושאר המנהלים) עדיין יכולים להוסיף שחקנים ידנית."),
+    S.isAdmin && !loggedIn() ? h("button",{class:"btn ghost full",style:"margin-top:8px",onclick:()=>{ S.admLinkLater=false; S.tab="list"; render(); window.scrollTo({top:0,behavior:"smooth"}); }},"📱 חבר גם את הטלפון שלי") : null,
     h("div",{class:"sub-h"},`✔ התחברו (${names.length})`),
     names.length ? h("div",{class:"chips"},names.map(n=>h("span",{class:"chip on"},n))) : h("div",{class:"hint"},"עוד אף אחד"),
     reg.length ? h("div",null,h("div",{class:"sub-h"},`⏳ נרשמו השבוע ועוד לא התחברו (${reg.length})`),h("div",{class:"chips"},reg.map(n=>h("span",{class:"chip"},n)))) : null);
@@ -1823,8 +1824,66 @@ function saveWho(name){
   if(lsGet("whoSaved")===S.uid+"|"+name) return;
   setDoc(doc(db,"who",S.uid),{name, at:Date.now()}).then(()=>lsSet("whoSaved",S.uid+"|"+name)).catch(e=>console.warn("who",e));
 }
+// ---------- organizers: attach their phone to the Google account ----------
+// The phone is verified by SMS in a separate, temporary session; the server then puts it on the organizer's account,
+// so one account is both "organizer" (via Google) and "player" (name on the list, sign-ups, votes).
+let proofAuth=null, proofCaptcha=null, proofConf=null;
+function proofSession(){
+  if(!proofAuth) proofAuth=getAuth(initializeApp(firebaseConfig,"phoneproof"));
+  let el=document.getElementById("recap2");
+  if(!el){ el=document.createElement("div"); el.id="recap2"; document.body.appendChild(el); }
+  if(!proofCaptcha) proofCaptcha=new RecaptchaVerifier(proofAuth, el, {size:"invisible"});
+  return proofAuth;
+}
+async function adminSendCode(){
+  const ph=normPhone(S.draft.admPh ?? lsGet("myPhone"));
+  if(!ph){ toast("כתוב מספר טלפון תקין"); return; }
+  S.admLink={step:"phone", busy:true}; render();
+  try{
+    const a=proofSession();
+    proofConf=await signInWithPhoneNumber(a,"+"+ph,proofCaptcha);
+    lsSet("myPhone",ph); S.admLink={step:"code", phone:ph}; render();
+  }catch(e){ console.warn("adm phone",e); try{ proofCaptcha&&proofCaptcha.clear(); }catch(_){} proofCaptcha=null; S.admLink={step:"phone", err:String(e&&e.code||"")}; toast(LOGIN_ERR[e&&e.code]||"לא הצלחתי לשלוח קוד"); render(); }
+}
+async function adminConfirmCode(){
+  const code=String(S.draft.admCode||"").replace(/\D/g,"");
+  if(code.length<6){ toast("כתוב את הקוד בן 6 הספרות"); return; }
+  if(S.admLink && S.admLink.busy) return;
+  S.admLink={...S.admLink, busy:true}; render();
+  try{
+    const cred=await proofConf.confirm(code);
+    const proof=await cred.user.getIdToken();
+    const r=await httpsCallable(fns,"adoptPhone")({proof});
+    try{ await signOut(proofAuth); }catch(_){}
+    const name=r&&r.data&&r.data.name;
+    if(name){ lsSet("myName",name); saveWho(name); }
+    await auth.currentUser.getIdToken(true);
+    toast(name?`✔ הטלפון חובר. שלום ${name}!`:"✔ הטלפון חובר"); setTimeout(()=>location.reload(),900);
+  }catch(e){ console.warn("adm confirm",e); S.admLink={...S.admLink, busy:false}; toast(LOGIN_ERR[e&&e.code]||"החיבור נכשל, נסה שוב"); render(); }
+}
+function adminPhoneCard(){
+  if(!S.isAdmin || loggedIn()) return null;
+  const L=S.admLink||{step:"phone"};
+  return h("div",{class:"card surv login"},
+    h("h2",null,"📱 חבר את הטלפון שלך"),
+    h("div",{class:"hint"},"פעם אחת: ככה האפליקציה יודעת מי אתה ברשימה, ואתה נרשם, מצביע ומדרג בשמך. הכניסה כמנהל נשארת עם גוגל."),
+    L.step==="code"
+      ? h("div",null,
+          h("div",{class:"hint"},`שלחנו קוד ב-SMS ל-${prettyPhone(L.phone)}`),
+          h("div",{class:"addrow"},
+            h("input",{id:"f_admCode",type:"text",inputmode:"numeric",autocomplete:"one-time-code",dir:"ltr",placeholder:"קוד בן 6 ספרות",maxlength:"6",value:S.draft.admCode||"",oninput:e=>{ S.draft.admCode=e.target.value; if(e.target.value.replace(/\D/g,"").length===6) adminConfirmCode(); }}),
+            h("button",{class:"btn",disabled:!!L.busy,onclick:adminConfirmCode},L.busy?"…":"אישור")),
+          h("button",{class:"linkbtn muted",onclick:()=>{ S.admLink={step:"phone"}; render(); }},"שנה מספר / שלח שוב"))
+      : h("div",{class:"addrow"},
+          h("input",{id:"f_admPh",type:"tel",inputmode:"tel",dir:"ltr",placeholder:"050-0000000",value:S.draft.admPh ?? prettyPhone(lsGet("myPhone")),oninput:e=>{S.draft.admPh=e.target.value;}}),
+          h("button",{class:"btn",disabled:!!L.busy,onclick:adminSendCode},L.busy?"…":"שלח קוד")),
+    L.err ? h("div",{class:"hint",style:"direction:ltr;text-align:left;font-size:11px;opacity:.7"},L.err) : null,
+    L.step!=="code" ? h("button",{class:"linkbtn muted",onclick:()=>{ S.admLinkLater=true; render(); }},"אחר כך") : null);
+}
+
 // the "who are you / log in" card at the top of the list (and of the teams tab during a vote)
 function whoCard(){
+  if(S.isAdmin) return S.admLinkLater ? null : adminPhoneCard();
   if(!S.isAdmin && S.cfgLoaded && S.uid && !S.surveyOpenUI && (!loggedIn() || !lsGet("myName")) && !S.loginLater) return loginCard();
   return null;
 }
