@@ -682,14 +682,17 @@ function nameOfUid(uid){
   const t=(S.tokens||[]).find(x=>x.uid===uid && x.name); if(t) return t.name;
   return "";
 }
-function votersBox(votes){
-  const names=votes.map(v=>nameOfUid(v.id)), known=names.filter(Boolean), unknown=names.length-known.length;
-  const ks=new Set(known.map(norm));
+function votersBox(votes, col){
+  // organizers can delete a vote (tap a name), e.g. a duplicate or an unknown device
+  const items=votes.map(v=>({v, n:nameOfUid(v.id)})).sort((a,b)=>(a.n||"תתת").localeCompare(b.n||"תתת","he"));
+  const ks=new Set(items.filter(x=>x.n).map(x=>norm(x.n)));
   const not=S.signups.slice(0,S.cfg.capacity).filter(s=>!ks.has(norm(s.name))).map(s=>s.name);
+  let unk=0;
+  const del=async it=>{ if(!confirm(`למחוק את ההצבעה של ${it.n||"מכשיר לא ידוע"}?`)) return; await run(()=>deleteDoc(doc(db,col||"votes",it.v.id)),"🗑️ ההצבעה נמחקה"); };
   return h("div",null,
     h("div",{class:"sub-h"},`✔ הצביעו (${votes.length})`),
-    known.length ? h("div",{class:"chips"},known.sort((a,b)=>a.localeCompare(b,"he")).map(n=>h("span",{class:"chip on"},n))) : (votes.length?null:h("div",{class:"hint"},"עוד אף אחד")),
-    unknown ? h("div",{class:"hint",style:"margin-top:4px"},`+ ${unknown} בלי שם (לא נרשמו מהמכשיר שלהם)`) : null,
+    items.length ? h("div",{class:"chips"},items.map(it=>h("button",{class:"chip on",onclick:()=>del(it)},it.n||`❔ לא ידוע ${++unk}`))) : h("div",{class:"hint"},"עוד אף אחד"),
+    unk ? h("div",{class:"hint",style:"margin-top:4px"},"❔ לא ידוע = מכשיר שלא התחבר ולא נרשם ממנו. אם נראה לך כפול, לחץ עליו כדי למחוק.") : (items.length?h("div",{class:"hint",style:"margin-top:4px"},"לחיצה על שם מוחקת את ההצבעה שלו."):null),
     not.length ? h("div",null,h("div",{class:"sub-h"},`⏳ ברשימה ועוד לא הצביעו (${not.length})`),h("div",{class:"chips"},not.map(n=>h("span",{class:"chip"},n)))) : null);
 }
 function roundVotes(){
@@ -2217,7 +2220,7 @@ function mvpCard(opt){
       return h("div",{class:"card mvpc"},
         h("h2",null,"⭐ הצבעת MVP",h("span",{class:"count"},`${mvpRoundVotes().length} הצביעו`)),
         h("div",{class:"hint"},"לחץ על שם כדי לבחור ידנית, או סגור והכרז על המנצח."),
-        votersBox(mvpRoundVotes()),
+        votersBox(mvpRoundVotes(),"mvpVotes"),
         h("div",{class:"chips"},names.slice().sort((a,b)=>(cnt.get(b)||0)-(cnt.get(a)||0)).map(n=>h("button",{class:"chip",onclick:()=>setMvp(n)},`${n}${cnt.get(n)?` · ${cnt.get(n)}`:""}`))),
         h("div",{class:"hint",style:"margin-top:10px"},"שלח לקבוצה קישור להצבעה:"),
         shareRow(mvpCallText()),
