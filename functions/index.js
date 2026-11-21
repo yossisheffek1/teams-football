@@ -35,6 +35,22 @@ async function tokensFor(uids) {
   }
   return out;
 }
+// tokens of these players: by the device that signed them up, and by name
+// (a player added by hand, or one who signed up from Safari but gets notifications in the app)
+async function playerTokens(players) {
+  const [all, names] = await Promise.all([allTokens(), namesFor().catch(() => new Map())]);
+  const out = [], seen = new Set();
+  for (const p of players) {
+    if (!p) continue;
+    const key = norm(p.name);
+    for (const t of all) {
+      const byUid = p.uid && p.uid !== "admin" && t.uid === p.uid;
+      const byName = !p.guestOf && key && norm(names.get(t.uid) || "") === key;
+      if ((byUid || byName) && !seen.has(t.token)) { seen.add(t.token); out.push({ ...t, pname: p.name }); }
+    }
+  }
+  return out;
+}
 async function allTokens() {
   const snap = await db.collection("tokens").get();
   return snap.docs.filter((d) => d.data().token).map((d) => ({ uid: d.id, token: d.data().token, ref: d.ref }));
@@ -194,10 +210,9 @@ async function syncWaitlist() {
     return active.filter((s) => prevWaiting.has(s.id));
   });
   if (!promoted.length) return;
-  const toks = await tokensFor(promoted.map((p) => p.uid));
+  const toks = await playerTokens(promoted);
   const msgs = [];
-  for (const p of promoted) {
-    const t = toks.find((x) => x.uid === p.uid); if (!t) continue;
+  for (const p of promoted) for (const t of toks.filter((x) => x.pname === p.name)) {
     const guest = !!p.guestOf;
     msgs.push({ ...t,
       title: guest ? "🎉 האורח שלך נכנס!" : "🎉 התפנה מקום, אתה בפנים!",
@@ -297,10 +312,9 @@ exports.onTeamsChange = onDocumentUpdated("teams/current", async (event) => {
     (opt.teams || []).forEach((t, i) => {
       (t.players || []).concat(t.subs || []).forEach((n) => { const s = byName.get(norm(n)); if (s) who.push({ s, color: COLORS[colors[i]], sub: (t.subs || []).includes(n) }); });
     });
-    const toks = await tokensFor(who.map((w) => w.s.uid));
+    const toks = await playerTokens(who.map((w) => w.s));
     const msgs = [];
-    for (const w of who) {
-      const t = toks.find((x) => x.uid === w.s.uid); if (!t) continue;
+    for (const w of who) for (const t of toks.filter((x) => x.pname === w.s.name)) {
       const mine = w.s.guestOf ? `האורח שלך ${w.s.name} ב${w.color}` : `אתה ב${w.color}${w.sub ? " (מחליף)" : ""}`;
       msgs.push({ ...t, link, title: "⚽ הכוחות להשבוע פורסמו!", body: mine });
     }
@@ -309,7 +323,7 @@ exports.onTeamsChange = onDocumentUpdated("teams/current", async (event) => {
 
   // teams vote opened
   if (a.status === "voting" && (b.status !== "voting" || b.at !== a.at)) {
-    const toks = await tokensFor(signups.slice(0, cap).map((s) => s.uid));
+    const toks = await playerTokens(signups.slice(0, cap));
     await sendAll(toks.map((t) => ({ ...t, link, title: "🗳️ הצבעה על הכוחות!", body: "אופציה א׳ או אופציה ב׳? היכנס להצביע" })));
   }
 
@@ -317,8 +331,7 @@ exports.onTeamsChange = onDocumentUpdated("teams/current", async (event) => {
   if (a.mvpOpen && !b.mvpOpen) {
     const opt = opts[a.chosen ?? 0] || opts[0];
     const names = (opt.teams || []).flatMap((t) => (t.players || []).concat(t.subs || []));
-    const uids = names.map((n) => (byName.get(norm(n)) || {}).uid);
-    const toks = await tokensFor(uids);
+    const toks = await playerTokens(names.map((n) => byName.get(norm(n)) || { name: n }));
     await sendAll(toks.map((t) => ({ ...t, link, title: "⭐ מי ה-MVP של הערב?", body: "היכנס והצבע לשחקן הטוב ביותר" })));
   }
 });
@@ -335,7 +348,7 @@ exports.onPaymentChange = onDocumentWritten("payments/current", async (event) =>
   const price = Number(a.price) || Number(cfg.price) || 0;
 
   if (!b.payer || b.at !== a.at) {
-    const toks = await tokensFor(active.map((s) => s.uid).filter((u) => u !== a.payer.uid));
+    const toks = (await playerTokens(active.filter((s) => s.uid !== a.payer.uid && norm(s.name) !== norm(a.payer.name)))).filter((t) => t.uid !== a.payer.uid);
     await sendAll(toks.map((t) => ({ ...t,
       title: `💳 ${a.payer.name} שילם על המגרש`,
       body: `${price}₪ לשחקן · היכנס לשלם או לסמן שהבאת מזומן` })));
@@ -345,7 +358,7 @@ exports.onPaymentChange = onDocumentWritten("payments/current", async (event) =>
     const marks = await db.collection("payMarks").get();
     const paid = new Set(marks.docs.map((d) => d.id).concat(a.paid || []));
     const unpaid = active.filter((s) => !paid.has(s.id) && s.uid !== a.payer.uid);
-    const toks = await tokensFor(unpaid.map((s) => s.uid));
+    const toks = (await playerTokens(unpaid)).filter((t) => t.uid !== a.payer.uid);
     await sendAll(toks.map((t) => ({ ...t,
       title: "⏰ תזכורת תשלום לכדורגל",
       body: `עוד לא סימנת ששילמת ${price}₪ ל${a.payer.name}` })));
@@ -362,7 +375,7 @@ exports.onPayMark = onDocumentWritten("payMarks/{id}", async (event) => {
   if (!pay || !pay.payer || a.by === pay.payer.uid) return;
   const su = await db.doc(`signups/${event.params.id}`).get();
   const name = su.exists ? su.data().name : "שחקן";
-  const toks = await tokensFor([pay.payer.uid]);
+  const toks = await playerTokens([pay.payer]);
   const price = Number(pay.price) || 0;
   await sendAll(toks.map((t) => ({ ...t,
     title: a.m === "cash" ? `💵 ${name} הביא לך מזומן` : `💳 ${name} שילם לך בביט`,
