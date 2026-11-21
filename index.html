@@ -2330,9 +2330,17 @@ function mvpCard(opt){
       const tally=mvpTally(), cnt=new Map(tally);
       return h("div",{class:"card mvpc"},
         h("h2",null,"⭐ הצבעת MVP",h("span",{class:"count"},`${mvpRoundVotes().length} הצביעו`)),
-        h("div",{class:"hint"},"לחץ על שם כדי לבחור ידנית, או סגור והכרז על המנצח."),
+        h("div",{class:"hint"},"לחיצה על שם כאן קובעת אותו כ-MVP ידנית. כדי להצביע כשחקן, השתמש בחלק \"🙋\" למטה."),
         votersBox(mvpRoundVotes(),"mvpVotes"),
         h("div",{class:"chips"},names.slice().sort((a,b)=>(cnt.get(b)||0)-(cnt.get(a)||0)).map(n=>h("button",{class:"chip",onclick:()=>setMvp(n)},`${n}${cnt.get(n)?` · ${cnt.get(n)}`:""}`))),
+        // an organizer who played votes like everyone (not for himself)
+        (()=>{ const me=lsGet("myName"), mine=myMvpVote();
+          if(!me) return h("div",{class:"aliasbox",style:"margin-top:10px"},
+            h("div",{class:"hint"},"🙋 שיחקת? מה השם שלך ברשימה? (פעם אחת, כדי להצביע)"),
+            h("div",{class:"chips"},names.map(n=>h("button",{class:"chip",onclick:()=>{ lsSet("myName",n); saveWho(n); render(); }},n))));
+          return h("div",{class:"aliasbox",style:"margin-top:10px"},
+            h("div",{class:"hint"}, mine?`🙋 הצבעת ל${mine}. אפשר לשנות עד הסגירה.`:"🙋 גם אני שיחקתי, ההצבעה שלי:"),
+            h("div",{class:"chips"},names.filter(n=>norm(n)!==norm(me)).map(n=>h("button",{class:"chip"+(mine===n?" on":""),onclick:()=>{ saveWho(me); voteMvp(n); }},(mine===n?"⭐ ":"")+n)))); })(),
         h("div",{class:"hint",style:"margin-top:10px"},"שלח לקבוצה קישור להצבעה:"),
         shareRow(mvpCallText()),
         h("button",{class:"btn full",style:"margin-top:10px",onclick:closeMvp},"סגור הצבעה והכרז"));
