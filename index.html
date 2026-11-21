@@ -364,6 +364,7 @@
   .kvrow .ic{width:30px;height:30px;border-radius:8px;background:var(--chip);font-weight:700}
   .kvval{min-width:30px;text-align:center;color:var(--ink);font-size:15px}
   .kvval.dim{color:var(--muted)}
+  .paymark{padding:4px 10px;font-size:13px;border-radius:10px;flex-shrink:0}
 </style>
 </head>
 <body>
@@ -810,7 +811,8 @@ const PAY_TXT={bit:"שילם בביט",cash:"הביא מזומן",admin:"סומ�
 function payMark(id){ return S.payMarks[id] || (S.paid.has(id)?{m:"admin"}:null); }
 const payActive = () => !!(S.pay && S.pay.payer);
 const payPrice = () => Number((S.pay&&S.pay.price) || S.cfg.price || 0);
-const iAmPayer = () => !!(S.pay && S.pay.payer && S.pay.payer.uid===S.uid);
+// the player who paid for the pitch: same device, or the same logged-in player on another device
+const iAmPayer = () => !!(S.pay && S.pay.payer && (S.pay.payer.uid===S.uid || (loggedIn() && lsGet("myName") && norm(S.pay.payer.name)===norm(lsGet("myName")))));
 function activeList(){ return S.signups.slice(0,S.cfg.capacity); }
 async function setMark(id, m){
   const ref=doc(db,"payMarks",id);
@@ -1978,7 +1980,7 @@ function payStatusList(canEdit){
     return h("div",{class:"payrow"+(mk?" ok":"")},
       h("span",{class:"pn"},s.name),
       h("span",{class:"ps"}, mk ? `${PAY_ICON[mk.m]||"✅"} ${PAY_TXT[mk.m]||"שילם"}` : "⏳ עוד לא"),
-      canEdit && !isPayer ? h("button",{class:"ic"+(mk?" x":""),title:mk?"בטל סימון":"סמן ששילם",onclick:()=>setMark(s.id, mk?null:"admin")}, mk?"↩":"✔") : h("span",{style:"width:32px"}));
+      canEdit && !isPayer ? h("button",{class:mk?"ic x":"btn ghost paymark",title:mk?"בטל סימון":"סמן ששילם",onclick:()=>setMark(s.id, mk?null:"admin")}, mk?"↩":"✔ שילם") : h("span",{style:"width:32px"}));
   }));
 }
 function payCard(){
@@ -2007,6 +2009,7 @@ function payCard(){
     return h("div",{class:"card paycard"},
       h("h2",null, iAmPayer()?"🏟️ אתה שילמת על המגרש":`🏟️ ${payer.name} שילם על המגרש`, h("span",{class:"count"},`${n}/${act.length} שילמו`)),
       h("div",{class:"hint"},`${price}₪ לשחקן · נאסף ${n*price}₪ מתוך ${act.length*price}₪`),
+      h("div",{class:"hint",style:"margin-top:4px"},"מישהו העביר ושכח לסמן? לחץ ״✔ שילם״ ליד השם שלו."),
       payStatusList(true),
       n<act.length ? h("div",{class:"share",style:"margin-top:10px"},
         h("button",{class:"btn",onclick:remindUnpaid},"📣 תזכורת בהתראה"),
