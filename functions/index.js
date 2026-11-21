@@ -6,6 +6,7 @@ const { setGlobalOptions } = require("firebase-functions/v2");
 const { initializeApp } = require("firebase-admin/app");
 const { getFirestore } = require("firebase-admin/firestore");
 const { getMessaging } = require("firebase-admin/messaging");
+const { getAuth } = require("firebase-admin/auth");
 
 initializeApp();
 setGlobalOptions({ region: "europe-west1", maxInstances: 3 });
@@ -586,4 +587,13 @@ exports.identify = onCall(async (req) => {
   }
   await db.doc(`phones/${uid}`).set(name ? { phone, name, v: true } : { phone, v: true }, { merge: true });
   return { name };
+});
+
+// does this phone already have an account? (so a second device signs in to it instead of creating another)
+exports.phoneStatus = onCall(async (req) => {
+  if (!req.auth) throw new HttpsError("unauthenticated", "sign in first");
+  const phone = normPhoneIL(req.data && req.data.phone);
+  if (!/^\d{9,15}$/.test(phone)) throw new HttpsError("invalid-argument", "bad phone");
+  try { await getAuth().getUserByPhoneNumber("+" + phone); return { exists: true }; }
+  catch (e) { return { exists: false }; }
 });

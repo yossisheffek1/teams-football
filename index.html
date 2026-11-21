@@ -1738,7 +1738,11 @@ async function sendCode(){
   S.login={step:"phone", busy:true}; render();
   try{
     const v=recaptchaBox(), e164="+"+ph, u=auth.currentUser;
-    confirmation = (u && u.isAnonymous) ? await linkWithPhoneNumber(u, e164, v) : await signInWithPhoneNumber(auth, e164, v);
+    // a phone that already has an account (e.g. logged in from Safari before) signs in to it;
+    // a new phone is attached to this device's current account, so its sign-ups stay
+    let exists=false;
+    try{ const r=await httpsCallable(fns,"phoneStatus")({phone:ph}); exists=!!(r&&r.data&&r.data.exists); }catch(_){}
+    confirmation = (u && u.isAnonymous && !exists) ? await linkWithPhoneNumber(u, e164, v) : await signInWithPhoneNumber(auth, e164, v);
     lsSet("myPhone",ph); S.login={step:"code", phone:ph}; render();
     setTimeout(()=>{ const el=document.getElementById("f_code"); if(el) el.focus(); },50);
   }catch(e){
@@ -1746,15 +1750,25 @@ async function sendCode(){
     S.login={step:"phone", err:String((e&&(e.code||e.message))||"")}; toast(LOGIN_ERR[e&&e.code]||"לא הצלחתי לשלוח קוד. נסה שוב"); render();
   }
 }
+async function sendCodeSignIn(){
+  const ph=S.login.phone || normPhone(lsGet("myPhone"));
+  try{ confirmation=await signInWithPhoneNumber(auth,"+"+ph,recaptchaBox()); S.login={step:"code", phone:ph}; delete S.draft.loginCode; render(); }
+  catch(e){ console.warn("resend",e); S.login={step:"phone", err:String(e&&e.code||"")}; render(); }
+}
 async function confirmCode(){
   const code=String(S.draft.loginCode||"").replace(/\D/g,"");
   if(code.length<6){ toast("כתוב את הקוד בן 6 הספרות"); return; }
+  if(S.login && S.login.busy) return;   // the code may arrive twice (auto-fill + button); confirm only once
   S.login={...S.login, busy:true}; render();
   try{
     try{ await confirmation.confirm(code); }
     catch(e){
       // this phone already has an account (from another browser): enter it
-      if(e && e.code==="auth/credential-already-in-use"){ const c=PhoneAuthProvider.credentialFromError(e); await signInWithCredential(auth,c); }
+      if(e && e.code==="auth/credential-already-in-use"){
+        const c=PhoneAuthProvider.credentialFromError(e);
+        try{ await signInWithCredential(auth,c); }
+        catch(e2){ S.login={step:"phone"}; toast("נשלח קוד חדש, הזן אותו שוב"); render(); await sendCodeSignIn(); return; }
+      }
       else throw e;
     }
     delete S.draft.loginCode;
