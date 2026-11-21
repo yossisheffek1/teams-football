@@ -2327,22 +2327,26 @@ function mvpCard(opt){
 // someone cancelled after the split: put another player in his exact place, in every option, without re-splitting
 function replaceCard(){
   const T=S.teams, cap=S.cfg.capacity, active=S.signups.slice(0,cap), waiting=S.signups.slice(cap);
-  const inOpt=new Set(T.options.flatMap(o=>o.teams.flatMap(t=>t.players.map(norm))));
-  const act=new Set(active.map(s=>norm(s.name)));
-  const gone=[...new Set(T.options.flatMap(o=>o.teams.flatMap(t=>t.players)))].filter(n=>!act.has(norm(n)));
-  if(!gone.length) return null;
+  const optNames=[...new Set(T.options.flatMap(o=>o.teams.flatMap(t=>t.players)))];
+  const inOpt=new Set(optNames.map(norm)), act=new Set(active.map(s=>norm(s.name)));
+  const gone=optNames.filter(n=>!act.has(norm(n)));
   const fresh=active.filter(s=>!inOpt.has(norm(s.name))).map(s=>s.name);
   const more=waiting.map(s=>s.name).filter(n=>!inOpt.has(norm(n)) && !fresh.includes(n));
+  if(!gone.length && !fresh.length) return null;
+  const pickers=n=>h("div",{class:"chips",style:"margin-top:6px"},
+    fresh.map(x=>h("button",{class:"chip on",onclick:()=>replacePlayer(n,x)},`⬅️ ${x}`)),
+    more.map(x=>h("button",{class:"chip",onclick:()=>replacePlayer(n,x)},x)));
   return h("div",{class:"card"},
-    h("h2",null,"🔁 מישהו ביטל אחרי החלוקה"),
-    h("div",{class:"hint"},"אפשר להכניס מחליף בדיוק למקום שלו, בכל האופציות, בלי לחלק מחדש. ההצבעה (אם פתוחה) ממשיכה כרגיל."),
+    h("h2",null,"🔁 הרשימה השתנתה אחרי החלוקה"),
+    h("div",{class:"hint"},"אפשר להכניס מחליף בדיוק למקום של מי שיצא, בכל האופציות, בלי לחלק מחדש. ההצבעה ממשיכה כרגיל."),
     gone.map(g=>h("div",{style:"margin-top:10px"},
-      h("div",null,"❌ ",h("b",null,g)," ביטל. מי נכנס במקומו?"),
-      h("div",{class:"chips",style:"margin-top:6px"},
-        fresh.map(n=>h("button",{class:"chip on",onclick:()=>replacePlayer(g,n)},`⬅️ ${n}`)),
-        more.map(n=>h("button",{class:"chip",onclick:()=>replacePlayer(g,n)},n))),
-      !fresh.length && !more.length ? h("div",{class:"hint"},"אין כרגע מי שיכנס. כשמישהו יירשם, הוא יופיע כאן.") : null)),
-    fresh.length ? h("div",{class:"hint",style:"margin-top:8px"},"⬅️ = עלה מההמתנה ועוד לא בכוחות.") : null);
+      h("div",null,"❌ ",h("b",null,g)," כבר לא ברשימה. מי נכנס במקומו?"),
+      fresh.length||more.length ? pickers(g) : h("div",{class:"hint"},"אין כרגע מי שיכנס. כשמישהו יירשם, הוא יופיע כאן."))),
+    // someone joined but nobody left the teams (e.g. the name was written differently): choose whom he replaces
+    !gone.length ? h("div",{style:"margin-top:10px"},
+      h("div",null,"➕ ",h("b",null,fresh.join(", "))," ברשימה אבל לא בכוחות. במקום מי?"),
+      h("div",{class:"chips",style:"margin-top:6px"},optNames.slice().sort((a,b)=>a.localeCompare(b,"he")).map(n=>h("button",{class:"chip",onclick:()=>replacePlayer(n,fresh[0])},n)))) : null,
+    fresh.length && gone.length ? h("div",{class:"hint",style:"margin-top:8px"},"⬅️ = ברשימה ועוד לא בכוחות.") : null);
 }
 async function replacePlayer(oldName, newName){
   const T=S.teams; if(!T) return;
