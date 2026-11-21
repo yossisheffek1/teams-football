@@ -558,3 +558,32 @@ exports.pushAck = onRequest({ cors: true, invoker: "public" }, async (req, res) 
   } catch (e) { console.warn("ack", e); }
   res.status(204).send("");
 });
+
+// ---------- phone login: who is this player? ----------
+// After a player verifies his phone (SMS), find his name: the organizer's contacts first, then earlier sign-ups with that phone.
+function normPhoneIL(p) {
+  let d = String(p || "").replace(/[^\d]/g, "");
+  if (d.startsWith("00")) d = d.slice(2);
+  if (d.startsWith("0")) d = "972" + d.slice(1);
+  return d;
+}
+exports.identify = onCall(async (req) => {
+  const phone = normPhoneIL(req.auth && req.auth.token && req.auth.token.phone_number);
+  if (!phone) throw new HttpsError("unauthenticated", "no verified phone");
+  const uid = req.auth.uid;
+  let name = "";
+  const rd = await db.doc("ratings/main").get();
+  const hit = ((rd.exists && rd.data().list) || []).find((x) => x && x.phone && normPhoneIL(x.phone) === phone);
+  if (hit) name = hit.n;
+  if (!name) {
+    const ps = await db.collection("phones").where("phone", "==", phone).get();
+    const other = ps.docs.find((d) => d.data().name);
+    if (other) name = other.data().name;
+  }
+  if (!name) {
+    const w = await db.doc(`who/${uid}`).get();
+    if (w.exists && w.data().name) name = w.data().name;
+  }
+  await db.doc(`phones/${uid}`).set(name ? { phone, name, v: true } : { phone, v: true }, { merge: true });
+  return { name };
+});

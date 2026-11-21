@@ -386,7 +386,7 @@ const firebaseConfig = {
 // =============================
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import { getAuth, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getAuth, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut, RecaptchaVerifier, linkWithPhoneNumber, signInWithPhoneNumber, PhoneAuthProvider, signInWithCredential } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-functions.js";
 import { getMessaging, getToken, onMessage, isSupported } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging.js";
 import { getFirestore, doc, collection, onSnapshot, setDoc, addDoc, deleteDoc, getDoc, updateDoc, serverTimestamp, query, orderBy, limit, writeBatch, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
@@ -400,7 +400,7 @@ const COLORS = [
   {n:"לבנים", c:"#ffffff", e:"⚪"}, {n:"סגולים", c:"#7c3aed", e:"🟣"}, {n:"ורודים", c:"#ec4899", e:"🩷"},
   {n:"חומים", c:"#92400e", e:"🟤"}
 ];
-const DEF_CFG = {capacity:18, numTeams:3, open:true, colors:[0,1,2,3,4,5,6,7], openAt:null, game:{day:"",time:"",place:""}, price:0, payLink:"", gameAt:null, lockHours:0, allowGuests:true, pushMode:"all", priority:[], prioHours:0, prioOpen:false};
+const DEF_CFG = {capacity:18, numTeams:3, open:true, colors:[0,1,2,3,4,5,6,7], openAt:null, game:{day:"",time:"",place:""}, price:0, payLink:"", gameAt:null, lockHours:0, allowGuests:true, pushMode:"all", priority:[], prioHours:0, prioOpen:false, requireLogin:false};
 const OPT_NAMES = ["אופציה א׳","אופציה ב׳"];
 const S = {
   cfg:{...DEF_CFG}, cfgLoaded:false, signups:[], signupsLoaded:false, ratings:[], apart:[], teams:null, votes:[], paid:new Set(), pay:{}, payMarks:{}, history:[], weeks:[], mvpVotes:[], lates:[], phones:{}, pushState:"unknown",
@@ -408,7 +408,7 @@ const S = {
   tab: location.hash==="#teams" ? "teams" : location.hash==="#stats" ? "stats" : "list",
   showPaste:false, confirmReset:false, confirmCancel:false, copyText:null, busy:false,
   subSel:new Set(), showColors:false, showImg:null, showText:null,
-  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false, showGuest:false, confirmGuest:false, editHist:null, histDraft:null, editPhone:null, colorPick:null, swapSel:null, myToken:null, adminPushOk:false, lastWin:null, winBusy:false, playersView:"rate", prioBanner:null, payForm:false, confirmPayCancel:false, busyTeams:false, pushTest:{uids:[],names:[]}, testing:false, showContacts:false, phoneNames:{}, setOpen:null, prioEdit:false, survey:null, surveyResults:null, myVote:null, voteDraft:null, surveyOpenUI:false, surveySel:null, confirmDel:null, confirmResetHist:false
+  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false, showGuest:false, confirmGuest:false, editHist:null, histDraft:null, editPhone:null, colorPick:null, swapSel:null, myToken:null, adminPushOk:false, lastWin:null, winBusy:false, playersView:"rate", prioBanner:null, payForm:false, confirmPayCancel:false, busyTeams:false, pushTest:{uids:[],names:[]}, testing:false, showContacts:false, phoneNames:{}, setOpen:null, prioEdit:false, survey:null, surveyResults:null, myVote:null, voteDraft:null, surveyOpenUI:false, surveySel:null, login:{step:"phone"}, authPhone:null, loginLater:false, confirmDel:null, confirmResetHist:false
 };
 try{ S.promoted = JSON.parse(localStorage.getItem("promoted")||"[]"); }catch(e){}
 let dismissedSug=new Set(); try{ dismissedSug=new Set(JSON.parse(localStorage.getItem("dismissedSug")||"[]")); }catch(e){}
@@ -568,7 +568,7 @@ async function checkAdmin(user){
     registerAdminDevice();
     onSnapshot(testRef, s=>{ S.pushTest = s.exists()?s.data():{uids:[],names:[]}; render(); }, ()=>{});
     onSnapshot(collection(db,"who"), q=>{ const m={}; q.docs.forEach(d=>{ if(d.data().name) m[d.id]=d.data().name; }); S.whoMap=m; render(); }, ()=>{});
-    onSnapshot(collection(db,"phones"), q=>{ const m={}, n={}; q.docs.forEach(d=>{ m[d.id]=d.data().phone; if(d.data().name) n[d.id]=d.data().name; }); S.phones=m; S.phoneNames=n; render(); }, ()=>{});
+    onSnapshot(collection(db,"phones"), q=>{ const m={}, n={}; const v=new Set(); q.docs.forEach(d=>{ m[d.id]=d.data().phone; if(d.data().name) n[d.id]=d.data().name; if(d.data().v) v.add(d.id); }); S.phones=m; S.phoneNames=n; S.phoneV=v; render(); }, ()=>{});
     onSnapshot(collection(db,"weeks"), q=>{ S.weeks=q.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(a.date||a.at)-(b.date||b.at)); render(); }, ()=>{});
     onSnapshot(latesRef, s=>{ S.lates = s.exists() ? (s.data().list||[]) : []; render(); }, ()=>{});
     try{ const c=await getDoc(cfgRef); if(!c.exists()) await setDoc(cfgRef, DEF_CFG); }catch(e){}
@@ -577,7 +577,8 @@ async function checkAdmin(user){
 }
 onAuthStateChanged(auth, async user=>{
   if(!user){ try{ await signInAnonymously(auth); }catch(e){ fail(e); } return; }
-  const first=!S.uid; S.uid = user.uid;
+  const first=!S.uid; S.uid = user.uid; S.authPhone = user.phoneNumber || null;
+  if(S.authPhone && !lsGet("myName")) identifyMe();
   if(first){ initPush(); if(user.isAnonymous){ backfillPhoneName(); if(lsGet("myName")) saveWho(lsGet("myName")); } }
   getDoc(doc(db,"surveyVotes",user.uid)).then(d=>{ S.myVote = d.exists()?d.data():null; render(); }).catch(()=>{});
   await checkAdmin(user);
@@ -647,7 +648,7 @@ async function selfRegister(name){
   if(me){ const i=S.signups.indexOf(me); toast(i<S.cfg.capacity ? `נרשמת! מקום ${i+1} ⚽` : `הרשימה מלאה, אתה מקום ${i-S.cfg.capacity+1} בהמתנה`); }
 }
 function savePhone(ph){
-  if(!S.uid) return;
+  if(!S.uid || S.authPhone) return;   // logged-in players: the server keeps the verified phone
   const name=clean(lsGet("myName"));
   setDoc(doc(db,"phones",S.uid), name?{phone:ph, name}:{phone:ph}).then(()=>{ lsSet("phoneSaved",ph); if(name) lsSet("phoneNamed",name); }).catch(e=>console.warn("phone",e));
 }
@@ -682,6 +683,7 @@ const mvpRoundVotes = () => S.teams ? S.mvpVotes.filter(v=>v.round===S.teams.at 
 const myMvpVote = () => { const v=mvpRoundVotes().find(v=>v.id===S.uid); return v?v.name:null; };
 async function voteMvp(name){
   if(!S.teams||!S.teams.mvpOpen||!S.uid) return;
+  if(needLogin()) return loginNeededToast();
   await run(()=>setDoc(doc(db,"mvpVotes",S.uid),{name, round:S.teams.at}), `הצבעת ל${name} ⭐`);
 }
 // name behind a device id: own signup, saved phone/name, or notification name
@@ -706,6 +708,7 @@ function roundVotes(){ return S.teams ? S.votes.filter(v=>v.round===S.teams.at &
 function myVote(){ const v=roundVotes().find(v=>v.id===S.uid); return v ? v.choice : null; }
 async function vote(choice){
   if(!S.teams || S.teams.status!=="voting" || !S.uid) return;
+  if(needLogin()) return loginNeededToast();
   await run(()=>setDoc(doc(db,"votes",S.uid), {choice, round:S.teams.at}), `הצבעת ל${OPT_NAMES[choice]} ✔`);
 }
 
@@ -1543,7 +1546,9 @@ function surveyCard(){
   const voted=S.myVote && S.myVote.round===sv.round;
   if(!S.surveyOpenUI) return h("button",{class:"card votecall survcall",onclick:()=>{ S.surveyOpenUI=true; S.voteDraft = voted ? {...S.myVote.r} : (S.voteDraft||{}); render(); }},
     h("b",null,"⭐ סקר דירוגים אנונימי"), h("span",null, voted?"✔ דירגת · לחץ כדי לעדכן":"עזור לאזן את הכוחות: דרג את השחקנים"));
-  if(!surveyKnown() || S.survGate) return h("div",{class:"card surv"},
+  if(!S.isAdmin && !loggedIn() && (S.cfg.requireLogin || !surveyKnown())) return loginCard("כדי לדרג צריך להתחבר פעם אחת עם הטלפון. הדירוג נשאר אנונימי.");
+  if(!S.isAdmin && loggedIn() && !lsGet("myName")) return loginCard();
+  if((S.isAdmin && !surveyKnown()) || S.survGate) return h("div",{class:"card surv"},
     h("h2",null,"⭐ סקר דירוגים"),
     h("div",{class:"hint"},"פעם ראשונה כאן? כתוב שם וטלפון ותוכל לדרג. הפרטים נשמרים בנפרד מהדירוג, כך שהדירוג נשאר אנונימי."),
     h("input",{id:"f_survMe",type:"text",class:"phone-in",placeholder:"השם שלך (כמו בקבוצה)",autocomplete:"name",value:S.draft.survMe ?? lsGet("myName") ?? "",oninput:e=>{S.draft.survMe=e.target.value;}}),
@@ -1564,7 +1569,7 @@ function surveyCard(){
   const names=(sv.names||[]).filter(n=>norm(n)!==me);
   return h("div",{class:"card surv"},
     h("h2",null,"⭐ סקר דירוגים",h("span",{class:"count"},`${Object.keys(d).filter(k=>d[k]).length}/${names.length}`)),
-    h("div",{class:"hint"},"מדרג בתור: ",h("b",null,lsGet("myName")||"לא ידוע")," · ",h("button",{class:"linkbtn",onclick:()=>{ S.survGate=true; render(); }},"שנה")),
+    h("div",{class:"hint"},"מדרג בתור: ",h("b",null,lsGet("myName")||"לא ידוע")),
     h("div",{class:"hint"},`1 = חלש, ${sv.max} = חזק מאוד. אם אתה לא מכיר מישהו, דלג עליו. הדירוג אנונימי: אף אחד לא רואה מה דירגת, רק ממוצע של כולם.`),
     names.map(n=>{ const k=norm(n), v=d[k]||0;
       return h("div",{class:"survrow"},
@@ -1627,6 +1632,23 @@ function surveyAdminCard(){
     h("button",{class:"btn full",style:"margin-top:10px",onclick:applySurveyAverages},"✔ החל ממוצעים על הדירוגים"),
     open ? h("button",{class:"btn ghost full",style:"margin-top:8px",onclick:closeSurvey},"סגור סקר") :
       h("button",{class:"linkbtn",onclick:()=>{ S.survey={...sv, round:0}; S.surveySel=null; render(); }},"פתח סקר חדש"));
+}
+
+// ---------- player login settings ----------
+function loginSettingsCard(){
+  const v=S.phoneV||new Set(), on=!!S.cfg.requireLogin;
+  const names=[...v].map(uid=>nameOfUid(uid)||"(בלי שם עדיין)").sort((a,b)=>a.localeCompare(b,"he"));
+  const reg=S.signups.filter(x=>x.uid && x.id===x.uid && !v.has(x.uid)).map(x=>x.name);
+  return h("div",{class:"card"},
+    h("h2",null,"🔐 התחברות שחקנים"),
+    h("div",{class:"hint"},"שחקן שמתחבר עם הטלפון (קוד ב-SMS) מזוהה בוודאות מכל מכשיר: בהרשמה, בהצבעות, בסקר ובהתראות."),
+    h("div",{class:"seg",style:"margin-top:8px"},
+      h("button",{class:"btn "+(!on?"on":"ghost"),onclick:()=>setCfg({requireLogin:false},"התחברות: רשות")},"רשות"),
+      h("button",{class:"btn "+(on?"on":"ghost"),onclick:()=>setCfg({requireLogin:true},"🔐 מעכשיו צריך להתחבר כדי להירשם ולהצביע")},"חובה")),
+    h("div",{class:"hint",style:"margin-top:6px"}, on ? "חובה: רק מי שהתחבר יכול להירשם, להצביע ולדרג. אתה עדיין יכול להוסיף שחקנים ידנית." : "רשות: כולם מתבקשים להתחבר, אבל אפשר גם בלי. כדאי להשאיר ככה שבוע-שבועיים ואז לעבור לחובה."),
+    h("div",{class:"sub-h"},`✔ התחברו (${names.length})`),
+    names.length ? h("div",{class:"chips"},names.map(n=>h("span",{class:"chip on"},n))) : h("div",{class:"hint"},"עוד אף אחד"),
+    reg.length ? h("div",null,h("div",{class:"sub-h"},`⏳ נרשמו השבוע ועוד לא התחברו (${reg.length})`),h("div",{class:"chips"},reg.map(n=>h("span",{class:"chip"},n)))) : null);
 }
 
 // ---------- who has notifications on (owner) ----------
@@ -1699,42 +1721,113 @@ function pushLogCard(){
 }
 
 // ---------- "who are you?" so regulars get their notifications ----------
+// ---------- phone login: one account per player, on every device ----------
+const loggedIn = () => !!S.authPhone;
+const needLogin = () => !!S.cfg.requireLogin && !loggedIn() && !S.isAdmin;
+let recaptcha=null, confirmation=null;
+function recaptchaBox(){
+  let el=document.getElementById("recap");
+  if(!el){ el=document.createElement("div"); el.id="recap"; document.body.appendChild(el); }   // outside the app, so render() keeps it
+  if(!recaptcha) recaptcha=new RecaptchaVerifier(auth, el, {size:"invisible"});
+  return recaptcha;
+}
+const LOGIN_ERR = {"auth/invalid-phone-number":"מספר הטלפון לא תקין","auth/too-many-requests":"יותר מדי ניסיונות. נסה שוב בעוד כמה דקות","auth/invalid-verification-code":"הקוד לא נכון","auth/code-expired":"הקוד פג תוקף, שלח קוד חדש","auth/operation-not-allowed":"התחברות בטלפון עוד לא הופעלה. דבר עם המארגן","auth/quota-exceeded":"נגמרה מכסת ההודעות להיום. נסה מחר","auth/missing-phone-number":"כתוב מספר טלפון"};
+async function sendCode(){
+  const ph=normPhone(S.draft.loginPh ?? lsGet("myPhone"));
+  if(!ph){ toast("כתוב מספר טלפון תקין"); return; }
+  S.login={step:"phone", busy:true}; render();
+  try{
+    const v=recaptchaBox(), e164="+"+ph, u=auth.currentUser;
+    confirmation = (u && u.isAnonymous) ? await linkWithPhoneNumber(u, e164, v) : await signInWithPhoneNumber(auth, e164, v);
+    lsSet("myPhone",ph); S.login={step:"code", phone:ph}; render();
+    setTimeout(()=>{ const el=document.getElementById("f_code"); if(el) el.focus(); },50);
+  }catch(e){
+    console.warn("login",e); try{ recaptcha&&recaptcha.clear(); }catch(_){} recaptcha=null;
+    S.login={step:"phone"}; toast(LOGIN_ERR[e&&e.code]||"לא הצלחתי לשלוח קוד. נסה שוב"); render();
+  }
+}
+async function confirmCode(){
+  const code=String(S.draft.loginCode||"").replace(/\D/g,"");
+  if(code.length<6){ toast("כתוב את הקוד בן 6 הספרות"); return; }
+  S.login={...S.login, busy:true}; render();
+  try{
+    try{ await confirmation.confirm(code); }
+    catch(e){
+      // this phone already has an account (from another browser): enter it
+      if(e && e.code==="auth/credential-already-in-use"){ const c=PhoneAuthProvider.credentialFromError(e); await signInWithCredential(auth,c); }
+      else throw e;
+    }
+    delete S.draft.loginCode;
+    S.authPhone = auth.currentUser && auth.currentUser.phoneNumber;
+    try{ await auth.currentUser.getIdToken(true); }catch(_){}
+    const name = await identifyMe();
+    if(name){ toast(`✔ מחובר. שלום ${name}!`); setTimeout(()=>location.reload(),900); }
+    else { S.login={step:"name"}; render(); }
+  }catch(e){ console.warn("confirm",e); S.login={...S.login, busy:false}; toast(LOGIN_ERR[e&&e.code]||"האימות נכשל, נסה שוב"); render(); }
+}
+// the server finds the player's name by his phone (organizer's contacts / earlier sign-ups)
+async function identifyMe(){
+  try{
+    const r=await httpsCallable(fns,"identify")({});
+    const name=r && r.data && r.data.name;
+    if(name){ lsSet("myName",name); lsSet("whoDone","1"); saveWho(name); render(); return name; }
+  }catch(e){ console.warn("identify",e); }
+  return null;
+}
+async function setAccountName(name){
+  name=clean(name); if(!name){ toast("כתוב את השם שלך"); return; }
+  lsSet("myName",name); lsSet("whoDone","1"); saveWho(name);
+  try{ await updateDoc(doc(db,"phones",S.uid),{name}); }catch(e){ console.warn("phones name",e); }
+  if(messaging && S.pushState==="on") refreshToken(false);
+  toast(`✔ שלום ${name}!`); setTimeout(()=>location.reload(),900);
+}
+function namePicker(onPick){
+  const hidden=new Set((S.cfg.hiddenNames||[]).map(norm)), seen=new Set(), names=[];
+  (S.cfg.priority||[]).concat(S.signups.filter(x=>!x.guestOf).map(x=>x.name)).forEach(n=>{ const k=norm(n); if(n && !hidden.has(k) && !seen.has(k)){ seen.add(k); names.push(n); } });
+  names.sort((a,b)=>a.localeCompare(b,"he"));
+  const q=norm(S.draft.whoQ||""), shown=q?names.filter(n=>norm(n).includes(q)):names;
+  return h("div",null,
+    names.length>12 ? h("input",{id:"f_whoQ",type:"text",class:"phone-in",placeholder:"🔍 חפש את השם שלך",value:S.draft.whoQ||"",oninput:e=>{ S.draft.whoQ=e.target.value; render(); const el=document.getElementById("f_whoQ"); if(el){ el.focus(); el.setSelectionRange(el.value.length,el.value.length); } }}) : null,
+    h("div",{class:"chips",style:"margin-top:10px"},shown.map(n=>h("button",{class:"chip",onclick:()=>onPick(n)},n))),
+    h("div",{class:"addrow",style:"margin-top:10px"},
+      h("input",{id:"f_whoOther",type:"text",placeholder:"לא ברשימה? כתוב שם ושם משפחה",value:S.draft.whoOtherName||"",oninput:e=>{S.draft.whoOtherName=e.target.value;}}),
+      h("button",{class:"btn",onclick:()=>onPick(S.draft.whoOtherName||"")},"שמור")));
+}
+function loginCard(reason){
+  if(S.isAdmin) return null;
+  if(loggedIn() && lsGet("myName")) return null;
+  const L=S.login||{step:"phone"};
+  if(loggedIn() || L.step==="name") return h("div",{class:"card surv login"},
+    h("h2",null,"👋 איך קוראים לך?"),
+    h("div",{class:"hint"},"בחר את השם שלך כמו שהוא מופיע בקבוצה. זה נעשה פעם אחת."),
+    namePicker(setAccountName));
+  return h("div",{class:"card surv login"},
+    h("h2",null,"🔐 התחברות עם הטלפון"),
+    h("div",{class:"hint"}, reason || "פעם אחת, ואז האפליקציה מזהה אותך מכל מכשיר: בהרשמה, בהצבעות ובהתראות."),
+    L.step==="code"
+      ? h("div",null,
+          h("div",{class:"hint"},`שלחנו קוד ב-SMS ל-${prettyPhone(L.phone)}`),
+          h("div",{class:"addrow"},
+            h("input",{id:"f_code",type:"text",inputmode:"numeric",autocomplete:"one-time-code",dir:"ltr",placeholder:"קוד בן 6 ספרות",maxlength:"6",value:S.draft.loginCode||"",oninput:e=>{ S.draft.loginCode=e.target.value; if(e.target.value.replace(/\D/g,"").length===6) confirmCode(); }}),
+            h("button",{class:"btn",disabled:!!L.busy,onclick:confirmCode},L.busy?"…":"אישור")),
+          h("button",{class:"linkbtn muted",onclick:()=>{ S.login={step:"phone"}; render(); }},"שנה מספר / שלח שוב"))
+      : h("div",{class:"addrow"},
+          h("input",{id:"f_loginPh",type:"tel",inputmode:"tel",autocomplete:"tel",dir:"ltr",placeholder:"050-0000000",value:S.draft.loginPh ?? prettyPhone(lsGet("myPhone")),oninput:e=>{S.draft.loginPh=e.target.value;},onkeydown:e=>{ if(e.key==="Enter") sendCode(); }}),
+          h("button",{class:"btn",disabled:!!L.busy,onclick:sendCode},L.busy?"…":"שלח קוד")),
+    !S.cfg.requireLogin && L.step!=="code" ? h("button",{class:"linkbtn muted",onclick:()=>{ S.loginLater=true; render(); }},"אחר כך") : null);
+}
+function loginNeededToast(){ toast("קודם התחבר עם הטלפון (למעלה)"); S.loginLater=false; S.tab="list"; render(); window.scrollTo({top:0,behavior:"smooth"}); }
+
 // every device says once who it is, so votes/notifications from Safari, WhatsApp or the home-screen app all have a name
 function saveWho(name){
   name=clean(name); if(!name || !S.uid) return;
   if(lsGet("whoSaved")===S.uid+"|"+name) return;
   setDoc(doc(db,"who",S.uid),{name, at:Date.now()}).then(()=>lsSet("whoSaved",S.uid+"|"+name)).catch(e=>console.warn("who",e));
 }
-function whoNeeded(){
-  if(S.isAdmin || !S.cfgLoaded || !S.uid || S.whoLater || S.surveyOpenUI) return false;   // the survey asks for a name itself
-  const me=norm(lsGet("myName"));
-  if(!me) return true;                                   // a device with no name at all
-  const pr=(S.cfg.priority||[]); if(!pr.length || lsGet("whoDone")) return false;
-  return !pr.some(n=>norm(n)===me);                      // has a name, but not as it appears among the regulars
-}
-function whoPick(name){
-  lsSet("whoDone","1");
-  if(name){ name=clean(name); lsSet("myName",name); saveWho(name); const ph=lsGet("myPhone"); if(ph) savePhone(ph); if(messaging && S.pushState==="on") refreshToken(false); toast(`✔ שלום ${name}!`); }
-  S.whoOther=false; delete S.draft.whoOtherName; render();
-}
+// the "who are you / log in" card at the top of the list (and of the teams tab during a vote)
 function whoCard(){
-  if(!whoNeeded()) return null;
-  const hidden=new Set((S.cfg.hiddenNames||[]).map(norm)), seen=new Set(), names=[];
-  (S.cfg.priority||[]).concat(S.signups.filter(x=>!x.guestOf).map(x=>x.name)).forEach(n=>{ const k=norm(n); if(n && !hidden.has(k) && !seen.has(k)){ seen.add(k); names.push(n); } });
-  names.sort((a,b)=>a.localeCompare(b,"he"));
-  const q=norm(S.draft.whoQ||""), shown=q?names.filter(n=>norm(n).includes(q)):names;
-  const noName=!lsGet("myName");
-  return h("div",{class:"card surv"},
-    h("h2",null,"👋 מי אתה?"),
-    h("div",{class:"hint"},"בחר את השם שלך פעם אחת, כדי שהאפליקציה תזהה אותך: בהצבעות, בסקרים ובהתראות."),
-    names.length>12 ? h("input",{id:"f_whoQ",type:"text",class:"phone-in",placeholder:"🔍 חפש את השם שלך",value:S.draft.whoQ||"",oninput:e=>{ S.draft.whoQ=e.target.value; render(); const el=document.getElementById("f_whoQ"); if(el){ el.focus(); el.setSelectionRange(el.value.length,el.value.length); } }}) : null,
-    h("div",{class:"chips",style:"margin-top:10px"},shown.map(n=>h("button",{class:"chip",onclick:()=>whoPick(n)},n))),
-    S.whoOther ? h("div",{class:"addrow",style:"margin-top:10px"},
-      h("input",{id:"f_whoOther",type:"text",placeholder:"השם שלך (שם ושם משפחה)",value:S.draft.whoOtherName||"",oninput:e=>{S.draft.whoOtherName=e.target.value;}}),
-      h("button",{class:"btn",onclick:()=>{ const n=clean(S.draft.whoOtherName||""); if(!n){ toast("כתוב את השם שלך"); return; } whoPick(n); }},"שמור")) : null,
-    h("div",{class:"winlinks",style:"justify-content:flex-start;margin-top:8px"},
-      S.whoOther ? null : h("button",{class:"linkbtn",onclick:()=>{ S.whoOther=true; render(); }},"השם שלי לא ברשימה"),
-      noName ? h("button",{class:"linkbtn muted",onclick:()=>{ S.whoLater=true; render(); }},"אחר כך") : h("button",{class:"linkbtn muted",onclick:()=>whoPick(null)},"אני לא קבוע")));
+  if(!S.isAdmin && S.cfgLoaded && S.uid && !S.surveyOpenUI && (!loggedIn() || !lsGet("myName")) && (S.cfg.requireLogin || !S.loginLater)) return loginCard();
+  return null;
 }
 
 // ---------- render ----------
@@ -1911,6 +2004,13 @@ function myCard(){
     return h("div",{class:"card"},h("div",{class:"empty"},"🔒 ההרשמה סגורה כרגע. היא תיפתח בקרוב."),pushBox());
   }
   const full=S.signups.length>=cap;
+  if(needLogin()) return h("div",{class:"card reg"},h("h2",null,"✋ הרשמה למשחק"),S.prioBanner,h("div",{class:"hint"},"🔐 כדי להירשם צריך להתחבר פעם אחת עם הטלפון (בכרטיס למעלה)."),pushBox());
+  if(loggedIn() && lsGet("myName")) return h("div",{class:"card reg"},
+    h("h2",null, full ? "⏳ הרשמה לרשימת המתנה" : "✋ הרשמה למשחק"),
+    S.prioBanner,
+    h("button",{class:"btn full big",disabled:S.busy,onclick:()=>selfRegister(lsGet("myName"))}, S.busy?"…":`אני בא! (${lsGet("myName")})`),
+    h("div",{class:"hint",style:"margin-top:8px"},"כל הקודם זוכה. אפשר לבטל מכל מכשיר שאתה מחובר בו."),
+    pushBox());
   const inp=h("input",{id:"myName",type:"text",placeholder:"השם שלך",autocomplete:"name",enterkeyhint:"go",value:lsGet("myName"),
     onkeydown:e=>{ if(e.key==="Enter") selfRegister(e.target.value); }});
   return h("div",{class:"card reg"},
@@ -2476,6 +2576,7 @@ function settingsSummary(title){
   if(title.includes("אנשי קשר")) return `${contactsList().length} טלפונים`;
   if(title.includes("פרטי המשחק")) { const g=game(); return [g.day,g.time].filter(Boolean).join(" ")||"לא הוגדר"; }
   if(title.includes("יומן")) { const l=(S.pushLog||[])[0]; return l?`אחרונה ${fmtTime(l.at)}`:"אין עדיין"; }
+  if(title.includes("התחברות")) return (S.cfg.requireLogin?"חובה":"רשות")+` · ${(S.phoneV||new Set()).size} מחוברים`;
   if(title.includes("מי מקבל")) return S.tokens?`${pushPeople().on.length} מכשירים`:"…";
   if(title.includes("התראות")) return ({all:"לכולם",admin:"רק אני",select:"נבחרים"})[c.pushMode||"all"];
   if(title.includes("ביטולים")) return ((c.lockHours||0)?`חסימה ${c.lockHours} ש׳`:"בלי חסימה")+(c.allowGuests===false?" · בלי אורחים":"");
@@ -2580,6 +2681,7 @@ function settingsCards(){
     prioCard(),
     S.isOwner ? adminsCard() : null,
     S.isOwner ? surveyAdminCard() : null,
+    loginSettingsCard(),
     S.isOwner ? pushPeopleCard() : null,
     S.isOwner ? pushLogCard() : null,
     apartCard(),
