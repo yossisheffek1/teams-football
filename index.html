@@ -692,8 +692,20 @@ function votersBox(votes){
     unknown ? h("div",{class:"hint",style:"margin-top:4px"},`+ ${unknown} בלי שם (לא נרשמו מהמכשיר שלהם)`) : null,
     not.length ? h("div",null,h("div",{class:"sub-h"},`⏳ ברשימה ועוד לא הצביעו (${not.length})`),h("div",{class:"chips"},not.map(n=>h("span",{class:"chip"},n)))) : null);
 }
-function roundVotes(){ return S.teams ? S.votes.filter(v=>v.round===S.teams.at && (v.choice===0||v.choice===1)) : []; }
-function myVote(){ const v=roundVotes().find(v=>v.id===S.uid); return v ? v.choice : null; }
+function roundVotes(){
+  if(!S.teams) return [];
+  const all=S.votes.filter(v=>v.round===S.teams.at && (v.choice===0||v.choice===1));
+  // one vote per person: the same player may have voted before logging in (another browser) and after.
+  // Keep the vote of his logged-in account; organizers see names, players fall back to their sign-ups.
+  const by=new Map(), V=S.phoneV||new Set();
+  for(const v of all){
+    const n=norm(nameOfUid(v.id)); const key=n||("#"+v.id);
+    const prev=by.get(key);
+    if(!prev || (V.has(v.id) && !V.has(prev.id)) || v.id===S.uid) by.set(key,v);
+  }
+  return [...by.values()];
+}
+function myVote(){ const v=S.teams && S.votes.find(v=>v.id===S.uid && v.round===S.teams.at && (v.choice===0||v.choice===1)); return v ? v.choice : null; }
 async function vote(choice){
   if(!S.teams || S.teams.status!=="voting" || !S.uid) return;
   if(needLogin()) return loginNeededToast();
