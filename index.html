@@ -365,6 +365,9 @@
   .kvval{min-width:30px;text-align:center;color:var(--ink);font-size:15px}
   .kvval.dim{color:var(--muted)}
   .paymark{padding:4px 10px;font-size:13px;border-radius:10px;flex-shrink:0}
+  .adminbar{width:100%;display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:right;cursor:pointer}
+  .adminbar span{font-weight:700;font-size:16px}
+  .adminbar small{color:var(--muted);font-size:12px}
 </style>
 </head>
 <body>
@@ -2233,8 +2236,11 @@ function viewList(){
       onkeydown:e=>{ if(e.key==="Enter"){ adminAdd([e.target.value]); e.target.value=""; } }});
     const signed=new Set(S.signups.map(s=>norm(s.name)));
     const regulars=S.ratings.map(r=>r.n).filter(n=>!signed.has(norm(n))).sort((a,b)=>a.localeCompare(b,"he"));
-    out.push(h("div",{class:"card admin"},
-      h("h2",null,"🛠️ ניהול (רק אתה רואה)"),
+    // collapsed by default: a quick-actions button for organizers
+    if(!lsGet("adminOpen")) out.push(h("button",{class:"card admin adminbar",onclick:()=>{ lsSet("adminOpen","1"); render(); }},
+      h("span",null,"🛠️ קיצורי דרך למנהל"), h("small",null,"הוספת שחקנים · הדבקה מוואטסאפ · קישור להרשמה ▾")));
+    else out.push(h("div",{class:"card admin"},
+      h("h2",{class:"tile-head",style:"cursor:pointer",onclick:()=>{ try{ localStorage.removeItem("adminOpen"); }catch(e){} S.showPaste=false; render(); }},"🛠️ קיצורי דרך למנהל",h("span",{class:"chev"},"▲")),
       h("div",{class:"addrow"},inp,h("button",{class:"btn",onclick:()=>{adminAdd([inp.value]);inp.value="";}},"הוסף")),
       regulars.length ? h("div",{class:"chips"},regulars.map(n=>h("button",{class:"chip",onclick:()=>adminAdd([n])},n))) : null,
       h("button",{class:"linkbtn",onclick:()=>{S.showPaste=!S.showPaste;render();}},S.showPaste?"סגור":"📥 הדבק רשימה מוואטסאפ"),
