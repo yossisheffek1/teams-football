@@ -579,6 +579,7 @@ onAuthStateChanged(auth, async user=>{
   if(!user){ try{ await signInAnonymously(auth); }catch(e){ fail(e); } return; }
   const first=!S.uid; S.uid = user.uid; S.authPhone = user.phoneNumber || null;
   if(S.authPhone && !lsGet("myName")) identifyMe();
+  if(S.authPhone) getDoc(doc(db,"who",user.uid)).then(d=>{ const n=d.exists()&&d.data().name; if(n && n!==lsGet("myName")){ lsSet("myName",n); render(); } }).catch(()=>{});
   if(first){ initPush(); }
   getDoc(doc(db,"surveyVotes",user.uid)).then(d=>{ S.myVote = d.exists()?d.data():null; render(); }).catch(()=>{});
   await checkAdmin(user);
@@ -1624,7 +1625,8 @@ function surveyAdminCard(){
 // ---------- player login settings ----------
 function loginSettingsCard(){
   const v=S.phoneV||new Set();
-  const names=[...v].map(uid=>nameOfUid(uid)||"(בלי שם עדיין)").sort((a,b)=>a.localeCompare(b,"he"));
+  const accts=[...v].map(uid=>({uid, n:nameOfUid(uid)})).sort((a,b)=>(a.n||"תתת").localeCompare(b.n||"תתת","he"));
+  const names=accts.map(a=>a.n||"(בלי שם עדיין)");
   // signed up from a device that isn't logged in, and hasn't logged in anywhere else under that name either
   const logged=new Set(names.map(norm));
   const reg=S.signups.filter(x=>x.uid && x.id===x.uid && !v.has(x.uid) && !logged.has(norm(x.name))).map(x=>x.name);
@@ -1634,8 +1636,18 @@ function loginSettingsCard(){
     h("div",{class:"hint",style:"margin-top:6px"},"שחקנים נרשמים, מצביעים ומדרגים רק אחרי התחברות. אתה (ושאר המנהלים) עדיין יכולים להוסיף שחקנים ידנית."),
     S.isAdmin && !loggedIn() ? h("button",{class:"btn ghost full",style:"margin-top:8px",onclick:()=>{ S.admLinkLater=false; S.tab="list"; render(); window.scrollTo({top:0,behavior:"smooth"}); }},"📱 חבר גם את הטלפון שלי") : null,
     h("div",{class:"sub-h"},`✔ התחברו (${names.length})`),
-    names.length ? h("div",{class:"chips"},names.map(n=>h("span",{class:"chip on"},n))) : h("div",{class:"hint"},"עוד אף אחד"),
+    accts.length ? h("div",{class:"chips"},accts.map(a=>h("button",{class:"chip on"+(S.renameUid===a.uid?" sel":""),onclick:()=>{ S.renameUid=S.renameUid===a.uid?null:a.uid; delete S.draft.whoQ; delete S.draft.whoOtherName; render(); }},a.n||"(בלי שם עדיין)"))) : h("div",{class:"hint"},"עוד אף אחד"),
+    accts.length && !S.renameUid ? h("div",{class:"hint",style:"margin-top:4px"},"שם לא נכון (למשל רק שם משפחה)? לחץ עליו ובחר את השם הנכון.") : null,
+    S.renameUid ? h("div",{class:"aliasbox"},
+      h("div",{class:"hint"},`השם הנכון של "${nameOfUid(S.renameUid)||"בלי שם"}":`),
+      namePicker(n=>renameAccount(S.renameUid,n))) : null,
     reg.length ? h("div",null,h("div",{class:"sub-h"},`⏳ נרשמו השבוע ועוד לא התחברו (${reg.length})`),h("div",{class:"chips"},reg.map(n=>h("span",{class:"chip"},n)))) : null);
+}
+
+async function renameAccount(uid, name){
+  name=clean(name); if(!name){ toast("כתוב שם"); return; }
+  S.renameUid=null; render();
+  await run(async()=>{ await setDoc(doc(db,"who",uid),{name, at:Date.now()}); await updateDoc(doc(db,"phones",uid),{name}); }, `✔ השם עודכן ל${name}`);
 }
 
 // ---------- who has notifications on (owner) ----------
@@ -1784,7 +1796,7 @@ async function setAccountName(name){
 }
 function namePicker(onPick){
   const hidden=new Set((S.cfg.hiddenNames||[]).map(norm)), seen=new Set(), names=[];
-  (S.cfg.priority||[]).concat(S.signups.filter(x=>!x.guestOf).map(x=>x.name)).forEach(n=>{ const k=norm(n); if(n && !hidden.has(k) && !seen.has(k)){ seen.add(k); names.push(n); } });
+  (S.cfg.priority||[]).concat(S.signups.filter(x=>!x.guestOf).map(x=>x.name), S.isAdmin?knownNames():[]).forEach(n=>{ const k=norm(n); if(n && !hidden.has(k) && !seen.has(k)){ seen.add(k); names.push(n); } });
   names.sort((a,b)=>a.localeCompare(b,"he"));
   const q=norm(S.draft.whoQ||""), shown=q?names.filter(n=>norm(n).includes(q)):names;
   return h("div",null,
