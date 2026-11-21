@@ -377,15 +377,16 @@ function balance(players, k, apart) {
   const sizes = sizesFor(players.length, k);
   const desc = (a, b) => b.r - a.r;
   const allGK = shuffle(players.filter((p) => p.gk)).sort(desc);
-  const gks = allGK.slice(0, k), rest = shuffle(players.filter((p) => !p.gk).concat(allGK.slice(k).map((p) => ({ ...p, gk: false })))).sort(desc);
+  // a keeper counts in the split by his own "split value" (kv), not by his rating
+  const gks = allGK.slice(0, k).map((p) => (p.kv != null ? { ...p, r: p.kv } : p)), rest = shuffle(players.filter((p) => !p.gk).concat(allGK.slice(k).map((p) => ({ ...p, gk: false })))).sort(desc);
   const teams = sizes.map(() => []);
   shuffle([...Array(k).keys()]).slice(0, gks.length).forEach((t, i) => teams[t].push(gks[i]));
   let idx = 0, fwd = true;
   const step = () => { if (fwd) { if (idx === k - 1) fwd = false; else idx++; } else { if (idx === 0) fwd = true; else idx--; } };
   for (const p of rest) { let g = 0; while (teams[idx].length >= sizes[idx] && g++ < k * 3) step(); teams[idx].push(p); step(); }
   const pairs = (apart || []).map((x) => [norm(x.a), norm(x.b)]);
-  const avg = players.reduce((a, p) => a + p.r, 0) / players.length;
   const sum = (t) => t.reduce((a, p) => a + p.r, 0);
+  const avg = teams.reduce((a, t) => a + sum(t), 0) / players.length;
   const cost = () => {
     let c = teams.reduce((a, t) => a + (sum(t) - t.length * avg) ** 2, 0);
     if (pairs.length) for (const t of teams) { const ns = new Set(t.map((p) => norm(p.name))); for (const [a, b] of pairs) if (ns.has(a) && ns.has(b)) c += 1000; }
@@ -402,7 +403,7 @@ function balance(players, k, apart) {
   return shuffle(teams).map((t) => t.map((p) => p.name).sort((x, y) => x.localeCompare(y, "he")));
 }
 function buildOption(main, subs, k, apart) {
-  const r = new Map(main.concat(subs).map((p) => [p.name, p.r]));
+  const r = new Map(main.concat(subs).map((p) => [p.name, p.gk && p.kv != null ? p.kv : p.r]));
   const T = balance(main, k, apart).map((ps) => ({ players: ps, subs: [] }));
   const sum = (t) => t.players.concat(t.subs).reduce((a, n) => a + (r.get(n) || DEF_RATING), 0);
   subs.slice().sort((a, b) => b.r - a.r).forEach((p) => {
@@ -433,7 +434,7 @@ exports.makeTeams = onCall(async (req) => {
   const roster = rd.exists ? rd.data().list || [] : [];
   const ap = await db.doc("admin/apart").get();
   const apart = ap.exists ? ap.data().list || [] : (rd.exists ? rd.data().apart || [] : []);
-  const info = (name) => { const r = roster.find((x) => norm(x.n) === norm(name)); return { name, r: r ? r.r : DEF_RATING, gk: !!(r && r.gk) }; };
+  const info = (name) => { const r = roster.find((x) => norm(x.n) === norm(name)); return { name, r: r ? r.r : DEF_RATING, gk: !!(r && r.gk), kv: r && r.gk && typeof r.kv === "number" ? r.kv : null }; };
   const subIds = new Set(Array.isArray(req.data && req.data.subs) ? req.data.subs : []);
   const main = active.map((s) => info(s.name));
   const subs = list.slice(cap).filter((s) => subIds.has(s.id)).map((s) => info(s.name));
