@@ -2184,6 +2184,7 @@ function setTeamColor(optIdx, i, ci){
   run(()=>updateDoc(teamsRef,{options}), `הצבע עודכן ל${COLORS[ci].n} ✔`);
 }
 function pickPlayer(o,t,kind,idx,name){
+  if(S.inSel){ bringIn(S.inSel, name); return; }   // a waiting player was chosen: he takes this player's place
   const sel=S.swapSel;
   if(!sel || sel.o!==o){ S.swapSel={o,t,kind,idx,name}; render(); return; }
   if(sel.t===t && sel.kind===kind && sel.idx===idx){ S.swapSel=null; render(); return; }
@@ -2199,7 +2200,26 @@ function pickPlayer(o,t,kind,idx,name){
   S.teams={...T, options}; S.swapSel=null; render();
   run(()=>updateDoc(teamsRef,{options}), `🔁 ${sel.name} ⇄ ${name}`);
 }
+// a waiting player goes into the teams in place of someone (in every option); that one can also leave the list
+async function bringIn(newName, oldName){
+  S.inSel=null; render();
+  await replacePlayer(oldName, newName);
+  const su=S.signups.find(s=>norm(s.name)===norm(oldName) && !s.guestOf);
+  if(su && confirm(`${newName} נכנס במקום ${oldName}.\nלהוציא את ${oldName} גם מרשימת השבוע?`)) await run(()=>deleteDoc(doc(db,"signups",su.id)),`${oldName} הוצא מהרשימה`);
+}
+function waitingInCard(){
+  const T=S.teams; if(!T || !S.isAdmin) return null;
+  const inOpt=new Set(T.options.flatMap(o=>o.teams.flatMap(t=>t.players.concat(t.subs||[]).map(norm))));
+  const cands=S.signups.filter(s=>!inOpt.has(norm(s.name))).map(s=>s.name);
+  if(!cands.length) return null;
+  return h("div",{class:"card"},
+    h("h2",null,"⏳ להכניס ממתין לכוחות"),
+    h("div",{class:"hint"},S.inSel?`נבחר: ${S.inSel}. עכשיו לחץ על השחקן בכוחות שהוא מחליף (בכל אופציה, אותו מקום).`:"מישהו ביטל? לחץ על הממתין, ואז על השחקן בכוחות שהוא מחליף. שאר הכוחות לא זזים."),
+    h("div",{class:"chips",style:"margin-top:6px"},cands.map(n=>h("button",{class:"chip"+(S.inSel===n?" on":""),onclick:()=>{ S.inSel=S.inSel===n?null:n; S.swapSel=null; render(); }},n))),
+    S.inSel ? h("button",{class:"linkbtn",onclick:()=>{ S.inSel=null; render(); }},"ביטול") : null);
+}
 function swapHint(o){
+  if(S.inSel) return h("div",{class:"swaphint on"},`⏳ לחץ על השחקן ש${S.inSel} נכנס במקומו`);
   const sel=S.swapSel;
   if(sel && sel.o===o) return h("div",{class:"swaphint on"},`🔁 נבחר: ${sel.name}. עכשיו לחץ על שחקן בקבוצה אחרת להחלפה`,
     h("button",{class:"linkbtn",onclick:()=>{S.swapSel=null;render();}},"ביטול"));
@@ -2369,6 +2389,7 @@ function viewTeams(){
     const names=new Set(active.map(s=>norm(s.name)));
     const stale = shown.some(o=>{ const p=o.teams.flatMap(t=>t.players.map(norm)); return p.length!==names.size || p.some(n=>!names.has(n)); });
     if(stale){ const rc=replaceCard(); out.push(rc || h("div",{class:"stale"},"⚠️ הרשימה השתנתה מאז החלוקה. לחץ ״צור אופציות חדשות״ לעדכון.")); }
+    else out.push(waitingInCard());
   }
 
   if(T.status==="final"){
