@@ -2324,6 +2324,35 @@ function mvpCard(opt){
     h("div",{class:"hint"}, mine?`הצבעת ל${mine}. אפשר לשנות עד שההצבעה נסגרת.`:"בחר את השחקן הטוב ביותר הערב:"),
     h("div",{class:"chips"},names.map(n=>h("button",{class:"chip"+(mine===n?" on":""),onclick:()=>voteMvp(n)},(mine===n?"⭐ ":"")+n))));
 }
+// someone cancelled after the split: put another player in his exact place, in every option, without re-splitting
+function replaceCard(){
+  const T=S.teams, cap=S.cfg.capacity, active=S.signups.slice(0,cap), waiting=S.signups.slice(cap);
+  const inOpt=new Set(T.options.flatMap(o=>o.teams.flatMap(t=>t.players.map(norm))));
+  const act=new Set(active.map(s=>norm(s.name)));
+  const gone=[...new Set(T.options.flatMap(o=>o.teams.flatMap(t=>t.players)))].filter(n=>!act.has(norm(n)));
+  if(!gone.length) return null;
+  const fresh=active.filter(s=>!inOpt.has(norm(s.name))).map(s=>s.name);
+  const more=waiting.map(s=>s.name).filter(n=>!inOpt.has(norm(n)) && !fresh.includes(n));
+  return h("div",{class:"card"},
+    h("h2",null,"🔁 מישהו ביטל אחרי החלוקה"),
+    h("div",{class:"hint"},"אפשר להכניס מחליף בדיוק למקום שלו, בכל האופציות, בלי לחלק מחדש. ההצבעה (אם פתוחה) ממשיכה כרגיל."),
+    gone.map(g=>h("div",{style:"margin-top:10px"},
+      h("div",null,"❌ ",h("b",null,g)," ביטל. מי נכנס במקומו?"),
+      h("div",{class:"chips",style:"margin-top:6px"},
+        fresh.map(n=>h("button",{class:"chip on",onclick:()=>replacePlayer(g,n)},`⬅️ ${n}`)),
+        more.map(n=>h("button",{class:"chip",onclick:()=>replacePlayer(g,n)},n))),
+      !fresh.length && !more.length ? h("div",{class:"hint"},"אין כרגע מי שיכנס. כשמישהו יירשם, הוא יופיע כאן.") : null)),
+    fresh.length ? h("div",{class:"hint",style:"margin-top:8px"},"⬅️ = עלה מההמתנה ועוד לא בכוחות.") : null);
+}
+async function replacePlayer(oldName, newName){
+  const T=S.teams; if(!T) return;
+  const sw=n=>norm(n)===norm(oldName)?newName:n;
+  const options=T.options.map(o=>({...o,
+    teams:o.teams.map(t=>({...t, players:t.players.map(sw), subs:(t.subs||[]).filter(n=>norm(n)!==norm(newName)).map(sw)})),
+    gks:(o.gks||[]).filter(n=>norm(n)!==norm(oldName)).concat(isGK(newName)&&!(o.gks||[]).some(n=>norm(n)===norm(newName))?[newName]:[])}));
+  S.teams={...T, options}; render();
+  await run(()=>updateDoc(teamsRef,{options}),`✔ ${newName} נכנס במקום ${oldName}`);
+}
 function viewTeams(){
   const out=[], T=S.teams, cap=S.cfg.capacity, active=S.signups.slice(0,cap);
   if(S.isAdmin) out.push(splitControls());
@@ -2335,7 +2364,7 @@ function viewTeams(){
     const shown = T.status==="final" ? [T.options[T.chosen??0]] : T.options;
     const names=new Set(active.map(s=>norm(s.name)));
     const stale = shown.some(o=>{ const p=o.teams.flatMap(t=>t.players.map(norm)); return p.length!==names.size || p.some(n=>!names.has(n)); });
-    if(stale) out.push(h("div",{class:"stale"},"⚠️ הרשימה השתנתה מאז החלוקה. לחץ ״צור אופציות חדשות״ לעדכון."));
+    if(stale){ const rc=replaceCard(); out.push(rc || h("div",{class:"stale"},"⚠️ הרשימה השתנתה מאז החלוקה. לחץ ״צור אופציות חדשות״ לעדכון.")); }
   }
 
   if(T.status==="final"){
