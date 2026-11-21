@@ -505,6 +505,7 @@ async function run(fn, okMsg){
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
+const prevPayRef = doc(db,"payments","prev");
 const cfgRef = doc(db,"config","main"), teamsRef = doc(db,"teams","current"), ratRef = doc(db,"ratings","main"), paidRef = doc(db,"payments","current");
 const surveyRef = doc(db,"survey","current"), surveyResRef = doc(db,"survey","results");
 const ownerRef = doc(db,"owner","admins"), apartRef = doc(db,"admin","apart");
@@ -531,6 +532,8 @@ function subscribe(){
   }, e=>fail(e));
   onSnapshot(votesCol, q=>{ S.votes=q.docs.map(d=>({id:d.id, ...d.data()})); render(); }, e=>console.warn("votes",e));
   onSnapshot(paidRef, s=>{ const d=s.exists()?s.data():{}; S.pay=d; S.paid=new Set(d.paid||[]); render(); }, e=>console.warn("paid",e));
+  onSnapshot(prevPayRef, s=>{ S.prevPay=s.exists()?s.data():null; render(); }, e=>console.warn("prevPay",e));
+  onSnapshot(collection(db,"prevMarks"), q=>{ const m={}; q.docs.forEach(d=>{ m[d.id]=d.data(); }); S.prevMarks=m; render(); }, e=>console.warn("prevMarks",e));
   onSnapshot(collection(db,"payMarks"), q=>{ const m={}; q.docs.forEach(d=>{ m[d.id]=d.data(); }); S.payMarks=m; render(); }, e=>console.warn("payMarks",e));
   onSnapshot(mvpCol, q=>{ S.mvpVotes=q.docs.map(d=>({id:d.id, ...d.data()})); render(); }, e=>console.warn("mvp",e));
   onSnapshot(surveyRef, s=>{ S.survey = s.exists()?s.data():null; render(); }, e=>console.warn("survey",e));
@@ -848,6 +851,7 @@ async function remindUnpaid(){
 async function newWeek(){
   const batch=writeBatch(db);
   const cap=S.cfg.capacity, played=S.signups.slice(0,cap);
+  let wkAt=0;
   if(played.length){
     const T=S.teams, opt=T&&T.status==="final"?T.options[T.chosen??0]:null;
     const subs=opt?opt.teams.flatMap(t=>t.subs||[]):[];
@@ -858,12 +862,20 @@ async function newWeek(){
         paid:played.filter(s=>payMark(s.id)).map(s=>({n:s.name, m:payMark(s.id).m})),
         unpaid:played.filter(s=>!payMark(s.id)).map(s=>s.name)};
     }
-    batch.set(doc(db,"weeks",String(wk.at)), wk);
+    batch.set(doc(db,"weeks",String(wk.at)), wk); wkAt=wk.at;
   }
   S.signups.forEach(s=>batch.delete(doc(db,"signups",s.id)));
   S.votes.forEach(v=>batch.delete(doc(db,"votes",v.id)));
   S.mvpVotes.forEach(v=>batch.delete(doc(db,"mvpVotes",v.id)));
   batch.set(teamsRef,{options:[],at:0,status:"draft",chosen:null,mvpOpen:false,mvp:null});
+  // last week's marks/request are replaced
+  Object.keys(S.prevMarks||{}).forEach(id=>batch.delete(doc(db,"prevMarks",id)));
+  if(payActive() && played.some(s=>!payMark(s.id) && !(S.pay.payer&&S.pay.payer.id===s.id))){
+    // players pay after the game: keep this week's payment open as "last week's payment"
+    const players={}; played.forEach(s=>{ players[s.id]={name:s.name, uid:s.uid||"", ...(s.guestOf?{guestOf:s.guestOf}:{})}; });
+    batch.set(prevPayRef,{payer:S.pay.payer, link:S.pay.link||"", price:payPrice(), at:S.pay.at||Date.now(), players, weekAt:wkAt});
+    Object.entries(S.payMarks).forEach(([id,mk])=>{ if(players[id]) batch.set(doc(db,"prevMarks",id),{m:mk.m, by:mk.by||"", at:mk.at||Date.now()}); });
+  } else if(S.prevPay) batch.delete(prevPayRef);
   batch.set(paidRef,{paid:[]});
   Object.keys(S.payMarks).forEach(id=>batch.delete(doc(db,"payMarks",id)));
   let msg="התחלנו שבוע חדש ⚽";
@@ -2033,6 +2045,56 @@ function payCard(){
     }));
 }
 
+// ---------- last week's payment, still open after a new list started ----------
+const prevMark = id => (S.prevMarks||{})[id] || null;
+function iAmPrevPayer(){ const p=S.prevPay&&S.prevPay.payer; return !!(p && (p.uid===S.uid || (loggedIn() && lsGet("myName") && norm(p.name)===norm(lsGet("myName"))))); }
+function myPrevRows(){
+  const P=S.prevPay; if(!P) return [];
+  const me=norm(lsGet("myName"));
+  return Object.entries(P.players||{}).filter(([id,x])=>(x.uid && x.uid===S.uid) || (!x.guestOf && loggedIn() && me && norm(x.name)===me) || (x.guestOf && x.uid===S.uid)).map(([id,x])=>({id,...x}));
+}
+async function setPrevMark(id, m){
+  const ref=doc(db,"prevMarks",id);
+  if(!m) return run(()=>deleteDoc(ref),"הסימון בוטל");
+  return run(()=>setDoc(ref,{m, by:S.uid||"", at:Date.now()}));
+}
+async function closePrevPay(){
+  if(!confirm("לסגור את התשלום משבוע שעבר?")) return;
+  const batch=writeBatch(db);
+  Object.keys(S.prevMarks||{}).forEach(id=>batch.delete(doc(db,"prevMarks",id)));
+  batch.delete(prevPayRef);
+  await run(()=>batch.commit(),"התשלום משבוע שעבר נסגר");
+}
+function prevPayCard(){
+  const P=S.prevPay; if(!P || !P.payer) return null;
+  const rows=Object.entries(P.players||{}).map(([id,x])=>({id,...x})).filter(x=>x.id!==P.payer.id);
+  const paid=rows.filter(x=>prevMark(x.id)).length, price=P.price||0;
+  if(iAmPrevPayer() || S.isAdmin){
+    return h("div",{class:"card paycard"},
+      h("h2",null,`💳 תשלום משבוע שעבר`+(iAmPrevPayer()?"":` · ל${P.payer.name}`),h("span",{class:"count"},`${paid}/${rows.length} שילמו`)),
+      h("div",{class:"hint"},`${price}₪ לשחקן · עוד לא שילמו: ${rows.length-paid}. מישהו העביר ושכח לסמן? לחץ ״✔ שילם״.`),
+      h("div",{class:"paylist"},rows.sort((a,b)=>(!!prevMark(a.id))-(!!prevMark(b.id))).map(x=>{ const mk=prevMark(x.id);
+        return h("div",{class:"payrow"+(mk?" ok":"")},
+          h("span",{class:"pn"},x.name),
+          h("span",{class:"ps"}, mk?`${PAY_ICON[mk.m]||"✅"} ${PAY_TXT[mk.m]||"שילם"}`:"⏳ עוד לא"),
+          h("button",{class:mk?"ic x":"btn ghost paymark",onclick:()=>setPrevMark(x.id, mk?null:"admin")}, mk?"↩":"✔ שילם")); })),
+      paid>=rows.length ? h("div",{class:"paid-ok",style:"margin-top:10px"},"🎉 כולם שילמו!") : null,
+      h("button",{class:"linkbtn muted",onclick:closePrevPay}, paid>=rows.length?"סגור":"סגור את התשלום הזה"));
+  }
+  const mine=myPrevRows().filter(x=>x.id!==P.payer.id);
+  if(!mine.length) return null;
+  const open=mine.filter(x=>!prevMark(x.id));
+  if(!open.length) return null;   // already paid: nothing to show
+  return h("div",{class:"card paycard"},
+    h("h2",null,`💳 תשלום משבוע שעבר ל${P.payer.name}`),
+    h("div",{class:"hint"},`${P.payer.name} שילם על המגרש בשבוע שעבר. כל שחקן מעביר לו ${price}₪.`),
+    open.map(x=>h("div",{class:"paybox"},
+      x.guestOf ? h("div",{class:"hint"},`עבור האורח שלך, ${x.name}:`) : payLinkBtn(P.link),
+      h("div",{class:"share"},
+        h("button",{class:"btn ghost",onclick:()=>setPrevMark(x.id,"bit").then(ok=>ok&&toast(`עדכנו את ${P.payer.name} ששילמת ✔`))},"✔ שילמתי בביט"),
+        h("button",{class:"btn ghost",onclick:()=>setPrevMark(x.id,"cash").then(ok=>ok&&toast(`עדכנו את ${P.payer.name} שהבאת מזומן 💵`))},"💵 העברתי מזומן")))));
+}
+
 function promoCards(){
   if(!S.isAdmin || !S.promoted.length) return [];
   return S.promoted.map(p=>{
@@ -2145,6 +2207,7 @@ function viewList(){
     out.push(h("button",{class:"card votecall mvpcall",onclick:()=>{S.tab="teams";render();}},
       h("b",null,"⭐ מי ה-MVP של הערב?"), h("span",null, myMvpVote() ? `הצבעת ל${myMvpVote()} · לחץ לשינוי` : "לחץ כאן כדי להצביע")));
   out.push(myCard());
+  out.push(prevPayCard());
   if(payActive()) out.push(payCard());   // an open payment request stays on top
   out.push(installCard());
   if(S.isAdmin){
@@ -2865,7 +2928,7 @@ function settingsCards(){
       h("div",{class:"chips"},[[18,3],[12,2],[15,3],[20,4]].map(([a,b])=>h("button",{class:"chip",onclick:()=>setCfg({capacity:a,numTeams:b})},`${a} · ${b} קבוצות`)))),
     h("div",{class:"card"},
       h("h2",null,"🗓️ שבוע חדש"),
-      h("div",{class:"hint"},"מוחק את הנרשמים, הכוחות, ההצבעות והתשלומים. הדירוגים, הטבלה והפרטים נשמרים."),
+      h("div",{class:"hint"},"מוחק את הנרשמים, הכוחות וההצבעות. הדירוגים, הטבלה והפרטים נשמרים. תשלום שעוד לא כולם סימנו בו ממשיך כ״תשלום משבוע שעבר״ עד שכולם משלמים."),
       h("button",{class:"btn warn full",style:"margin-top:12px",onclick:()=>{
         if(!S.confirmReset){ S.confirmReset=true; render(); setTimeout(()=>{S.confirmReset=false;render();},4000); return; }
         S.confirmReset=false; S.tab="list"; newWeek(); render();

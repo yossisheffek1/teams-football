@@ -653,3 +653,31 @@ exports.adoptPhone = onCall(async (req) => {
   if (name) await db.doc(`who/${me}`).set({ name, at: Date.now() });
   return { name };
 });
+
+// ---------- last week's payment (kept open after a new list) ----------
+// keep the week's history up to date, and tell the payer when someone marks he paid
+exports.onPrevMark = onDocumentWritten("prevMarks/{id}", async (event) => {
+  const pv = await db.doc("payments/prev").get();
+  if (!pv.exists) return;
+  const P = pv.data();
+  const marks = await db.collection("prevMarks").get();
+  const mk = new Map(marks.docs.map((d) => [d.id, d.data()]));
+  const players = Object.entries(P.players || {});
+  if (P.weekAt) {
+    const paid = [], unpaid = [];
+    for (const [id, x] of players) {
+      if (P.payer && id === P.payer.id) continue;
+      const m = mk.get(id);
+      if (m) paid.push({ n: x.name, m: m.m }); else unpaid.push(x.name);
+    }
+    await db.doc(`weeks/${P.weekAt}`).set({ pay: { payer: P.payer.name, price: P.price || 0, paid, unpaid } }, { merge: true }).catch(() => {});
+  }
+  const b = event.data.before && event.data.before.data();
+  const a = event.data.after && event.data.after.data();
+  if (!a || (b && b.m === a.m) || !["bit", "cash"].includes(a.m)) return;
+  const who = (P.players || {})[event.params.id];
+  const toks = await playerTokens([P.payer]);
+  await sendAll(toks.map((t) => ({ ...t,
+    title: a.m === "cash" ? `💵 ${who ? who.name : "שחקן"} הביא לך מזומן` : `💳 ${who ? who.name : "שחקן"} שילם לך בביט`,
+    body: `${P.price || 0}₪ על המגרש מהשבוע שעבר` })));
+});
