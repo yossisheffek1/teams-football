@@ -681,3 +681,14 @@ exports.onPrevMark = onDocumentWritten("prevMarks/{id}", async (event) => {
     title: a.m === "cash" ? `💵 ${who ? who.name : "שחקן"} הביא לך מזומן` : `💳 ${who ? who.name : "שחקן"} שילם לך בביט`,
     body: `${P.price || 0}₪ על המגרש מהשבוע שעבר` })));
 });
+
+// ---------- MVP tally for organizers who may not read the votes themselves ----------
+exports.onMvpVote = onDocumentWritten("mvpVotes/{id}", async () => {
+  const t = await db.doc("teams/current").get();
+  const round = t.exists ? t.data().at : null;
+  if (!round) return;
+  const snap = await db.collection("mvpVotes").where("round", "==", round).get();
+  const counts = {}, voters = [];
+  snap.docs.forEach((d) => { const n = d.data().name; if (typeof n !== "string") return; counts[n] = (counts[n] || 0) + 1; voters.push(d.id); });
+  await db.doc("state/mvpTally").set({ round, counts, voters, at: Date.now() });
+});

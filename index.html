@@ -535,7 +535,6 @@ function subscribe(){
   onSnapshot(prevPayRef, s=>{ S.prevPay=s.exists()?s.data():null; render(); }, e=>console.warn("prevPay",e));
   onSnapshot(collection(db,"prevMarks"), q=>{ const m={}; q.docs.forEach(d=>{ m[d.id]=d.data(); }); S.prevMarks=m; render(); }, e=>console.warn("prevMarks",e));
   onSnapshot(collection(db,"payMarks"), q=>{ const m={}; q.docs.forEach(d=>{ m[d.id]=d.data(); }); S.payMarks=m; render(); }, e=>console.warn("payMarks",e));
-  onSnapshot(mvpCol, q=>{ S.mvpVotes=q.docs.map(d=>({id:d.id, ...d.data()})); render(); }, e=>console.warn("mvp",e));
   onSnapshot(surveyRef, s=>{ S.survey = s.exists()?s.data():null; render(); }, e=>console.warn("survey",e));
   onSnapshot(histCol, q=>{ S.history=q.docs.map(d=>({id:d.id, ...d.data()})).sort((a,b)=>(a.at||0)-(b.at||0)); render(); }, e=>console.warn("history",e));
 }
@@ -590,7 +589,17 @@ onAuthStateChanged(auth, async user=>{
   if(first){ initPush(); }
   getDoc(doc(db,"surveyVotes",user.uid)).then(d=>{ S.myVote = d.exists()?d.data():null; render(); }).catch(()=>{});
   await checkAdmin(user);
+  listenMvp();
 });
+// MVP votes: only the main organizer sees who voted for whom; others see their own vote,
+// and organizers see the server's tally (counts and who voted)
+let mvpUnsub=null, tallyUnsub=null;
+function listenMvp(){
+  if(mvpUnsub) mvpUnsub(); if(tallyUnsub){ tallyUnsub(); tallyUnsub=null; }
+  if(S.isOwner) mvpUnsub=onSnapshot(mvpCol, q=>{ S.mvpVotes=q.docs.map(d=>({id:d.id, ...d.data()})); render(); }, e=>console.warn("mvp",e));
+  else if(S.uid) mvpUnsub=onSnapshot(doc(db,"mvpVotes",S.uid), d=>{ S.mvpVotes=d.exists()?[{id:d.id,...d.data()}]:[]; render(); }, e=>console.warn("mvp",e));
+  if(S.isAdmin && !S.isOwner) tallyUnsub=onSnapshot(doc(db,"state","mvpTally"), d=>{ S.mvpTallyDoc=d.exists()?d.data():null; render(); }, e=>console.warn("tally",e));
+}
 subscribe();
 setTimeout(()=>{ if(S.loading){ S.loading=false; S.error="הטעינה לוקחת יותר מדי זמן. בדוק חיבור לאינטרנט."; render(); } }, 10000);
 
@@ -680,6 +689,7 @@ const myMvpVote = () => { const v=mvpRoundVotes().find(v=>v.id===S.uid); return 
 async function voteMvp(name){
   if(!S.teams||!S.teams.mvpOpen||!S.uid) return;
   if(needLogin()) return loginNeededToast();
+  if(norm(name)===norm(lsGet("myName"))){ toast("אי אפשר להצביע לעצמך 🙂"); return; }
   await run(()=>setDoc(doc(db,"mvpVotes",S.uid),{name, round:S.teams.at}), `הצבעת ל${name} ⭐`);
 }
 // name behind a device id: own signup, saved phone/name, or notification name
@@ -1013,7 +1023,15 @@ async function setMvp(name){
   await run(()=>updateDoc(teamsRef,{mvpOpen:false, mvp:name}));
   await run(()=>setDoc(doc(db,"history",String(T.at)),{at:T.at, date:Date.now(), mvp:name},{merge:true}), `⭐ ${name} הוא ה-MVP!`);
 }
-function mvpTally(){ const m=new Map(); mvpRoundVotes().forEach(v=>m.set(v.name,(m.get(v.name)||0)+1)); return [...m.entries()].sort((a,b)=>b[1]-a[1]); }
+function mvpTally(){
+  if(!S.isOwner){ const t=S.mvpTallyDoc; if(!t || !S.teams || t.round!==S.teams.at) return []; return Object.entries(t.counts||{}).sort((a,b)=>b[1]-a[1]); }
+  const m=new Map(); mvpRoundVotes().forEach(v=>m.set(v.name,(m.get(v.name)||0)+1)); return [...m.entries()].sort((a,b)=>b[1]-a[1]);
+}
+// who voted (ids): the owner from the votes, other organizers from the server's tally
+function mvpVoters(){
+  if(S.isOwner) return mvpRoundVotes();
+  const t=S.mvpTallyDoc; return t && S.teams && t.round===S.teams.at ? (t.voters||[]).map(id=>({id})) : [];
+}
 function closeMvp(){
   const t=mvpTally(); if(!t.length){ toast("אין עדיין הצבעות"); return; }
   if(t.length>1 && t[0][1]===t[1][1]){ toast("תיקו! לחץ על שם כדי לבחור"); return; }
@@ -2395,9 +2413,12 @@ function mvpCard(opt){
     if(T.mvpOpen){
       const tally=mvpTally(), cnt=new Map(tally);
       return h("div",{class:"card mvpc"},
-        h("h2",null,"⭐ הצבעת MVP",h("span",{class:"count"},`${mvpRoundVotes().length} הצביעו`)),
+        h("h2",null,"⭐ הצבעת MVP",h("span",{class:"count"},`${mvpVoters().length} הצביעו`)),
         h("div",{class:"hint"},"לחיצה על שם כאן קובעת אותו כ-MVP ידנית. כדי להצביע כשחקן, השתמש בחלק \"🙋\" למטה."),
-        votersBox(mvpRoundVotes(),"mvpVotes"),
+        votersBox(mvpVoters(),"mvpVotes"),
+        S.isOwner && mvpRoundVotes().length ? h("details",{class:"aliasbox",style:"margin-top:8px"},
+          h("summary",null,"🔒 מי הצביע למי (רק אתה רואה)"),
+          mvpRoundVotes().map(v=>({from:nameOfUid(v.id)||"❔ לא ידוע", to:v.name})).sort((a,b)=>a.to.localeCompare(b.to,"he")).map(x=>h("div",{class:"logp"},h("span",{class:"pn"},x.from),h("small",null,`⭐ ${x.to}`)))) : null,
         h("div",{class:"chips"},names.slice().sort((a,b)=>(cnt.get(b)||0)-(cnt.get(a)||0)).map(n=>h("button",{class:"chip",onclick:()=>setMvp(n)},`${n}${cnt.get(n)?` · ${cnt.get(n)}`:""}`))),
         // an organizer who played votes like everyone (not for himself)
         (()=>{ const me=lsGet("myName"), mine=myMvpVote();
@@ -2420,7 +2441,7 @@ function mvpCard(opt){
   return h("div",{class:"card mvpc"},
     h("h2",null,"⭐ מי ה-MVP של הערב?"),
     h("div",{class:"hint"}, mine?`הצבעת ל${mine}. אפשר לשנות עד שההצבעה נסגרת.`:"בחר את השחקן הטוב ביותר הערב:"),
-    h("div",{class:"chips"},names.map(n=>h("button",{class:"chip"+(mine===n?" on":""),onclick:()=>voteMvp(n)},(mine===n?"⭐ ":"")+n))));
+    h("div",{class:"chips"},names.filter(n=>norm(n)!==norm(lsGet("myName"))).map(n=>h("button",{class:"chip"+(mine===n?" on":""),onclick:()=>voteMvp(n)},(mine===n?"⭐ ":"")+n))));
 }
 // someone cancelled after the split: put another player in his exact place, in every option, without re-splitting
 function replaceCard(){
