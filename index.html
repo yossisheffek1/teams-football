@@ -1743,7 +1743,7 @@ async function sendCode(){
     setTimeout(()=>{ const el=document.getElementById("f_code"); if(el) el.focus(); },50);
   }catch(e){
     console.warn("login",e); try{ recaptcha&&recaptcha.clear(); }catch(_){} recaptcha=null;
-    S.login={step:"phone"}; toast(LOGIN_ERR[e&&e.code]||"לא הצלחתי לשלוח קוד. נסה שוב"); render();
+    S.login={step:"phone", err:String((e&&(e.code||e.message))||"")}; toast(LOGIN_ERR[e&&e.code]||"לא הצלחתי לשלוח קוד. נסה שוב"); render();
   }
 }
 async function confirmCode(){
@@ -1814,6 +1814,7 @@ function loginCard(reason){
       : h("div",{class:"addrow"},
           h("input",{id:"f_loginPh",type:"tel",inputmode:"tel",autocomplete:"tel",dir:"ltr",placeholder:"050-0000000",value:S.draft.loginPh ?? prettyPhone(lsGet("myPhone")),oninput:e=>{S.draft.loginPh=e.target.value;},onkeydown:e=>{ if(e.key==="Enter") sendCode(); }}),
           h("button",{class:"btn",disabled:!!L.busy,onclick:sendCode},L.busy?"…":"שלח קוד")),
+    L.err ? h("div",{class:"hint",style:"direction:ltr;text-align:left;font-size:11px;opacity:.7"},L.err) : null,
     !S.cfg.requireLogin && L.step!=="code" ? h("button",{class:"linkbtn muted",onclick:()=>{ S.loginLater=true; render(); }},"אחר כך") : null);
 }
 function loginNeededToast(){ toast("קודם התחבר עם הטלפון (למעלה)"); S.loginLater=false; S.tab="list"; render(); window.scrollTo({top:0,behavior:"smooth"}); }
