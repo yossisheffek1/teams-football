@@ -1,0 +1,289 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // the main organizer (owner): the only one who sees ratings and manages organizers
+    function isOwner() {
+      return request.auth != null
+        && request.auth.token.email == "__OWNER_EMAIL__"
+        && request.auth.token.email_verified == true;
+    }
+    // organizers: the owner plus the emails he added in the app
+    function isAdmin() {
+      return isOwner() || (request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email.lower() in
+           get(/databases/$(database)/documents/owner/admins).data.get('emails', []));
+    }
+    function cfg() {
+      return get(/databases/$(database)/documents/config/main).data;
+    }
+    function regOpen() {
+      let c = cfg();
+      return c.open == true
+        || (c.get('openAt', null) is number && request.time.toMillis() >= c.openAt);
+    }
+    // "regulars first": open early only for names on the organizer's priority list
+    function prioOpen() {
+      let c = cfg();
+      return c.get('prioOpen', false) == true
+        || (c.get('openAt', null) is number && c.get('prioHours', 0) > 0
+            && request.time.toMillis() >= c.openAt - c.prioHours * 3600000);
+    }
+    function isPrioName(n) {
+      return n.lower() in cfg().get('priority', []);
+    }
+    function cancelLocked() {
+      let c = cfg();
+      return c.get('gameAt', null) is number
+        && c.get('lockHours', 0) > 0
+        && request.time.toMillis() >= c.gameAt - c.lockHours * 3600000
+        && request.time.toMillis() < c.gameAt + 21600000;
+    }
+    function votingOpen() {
+      return get(/databases/$(database)/documents/teams/current).data.status == "voting";
+    }
+    // MVP vote: mvp/current, open for 24 hours (also after a new list)
+    function mvpDoc() {
+      return get(/databases/$(database)/documents/mvp/current).data;
+    }
+    function mvpOpen() {
+      return exists(/databases/$(database)/documents/mvp/current)
+        && mvpDoc().open == true
+        && request.time.toMillis() < mvpDoc().closeAt
+        && request.resource.data.round == mvpDoc().round
+        && request.resource.data.name in mvpDoc().names;
+    }
+    // phone login: only players who verified a phone by SMS (or organizers) sign up, vote and rate
+    function hasPhone() {
+      return request.auth != null && ('phone_number' in request.auth.token);
+    }
+    function loginOk() {
+      return isAdmin() || hasPhone();
+    }
+    // the logged-in player who paid for the pitch, even from another device than the one he posted from
+    function isPayerByName() {
+      return hasPhone()
+        && exists(/databases/$(database)/documents/who/$(request.auth.uid))
+        && get(/databases/$(database)/documents/who/$(request.auth.uid)).data.name.lower()
+           == get(/databases/$(database)/documents/payments/current).data.payer.name.lower();
+    }
+    // last week's payment, kept open after a new list started
+    function prevPay() {
+      return get(/databases/$(database)/documents/payments/prev).data;
+    }
+    function myWhoName() {
+      return get(/databases/$(database)/documents/who/$(request.auth.uid)).data.name.lower();
+    }
+    function isPrevPayer() {
+      return request.auth != null && (prevPay().payer.uid == request.auth.uid
+        || (hasPhone() && exists(/databases/$(database)/documents/who/$(request.auth.uid))
+            && myWhoName() == prevPay().payer.name.lower()));
+    }
+    function isPrevPlayer(id) {
+      return request.auth != null && (id in prevPay().players)
+        && (prevPay().players[id].uid == request.auth.uid
+            || (hasPhone() && exists(/databases/$(database)/documents/who/$(request.auth.uid))
+                && myWhoName() == prevPay().players[id].name.lower()));
+    }
+    function validName(d) {
+      return d.name is string && d.name.size() > 0 && d.name.size() <= 40;
+    }
+
+    match /config/{d}  { allow read: if true; allow write: if isAdmin(); }
+    match /mvp/{d}     { allow read: if true; allow write: if isAdmin(); }
+    match /teams/{d}   { allow read: if true; allow write: if isAdmin(); }
+    match /ratings/{d} { allow read, write: if isOwner(); }
+    match /owner/{d}   { allow read: if isAdmin(); allow write: if isOwner(); }
+    match /admin/{d}   { allow read, write: if isAdmin() && d != 'push'; }
+    // the main organizer's own devices (for "only me" notifications): only he reads or writes it
+    match /admin/push  { allow read, write: if isOwner(); }
+    // payment request: a registered player who paid for the pitch posts his link;
+    // only he (or the organizer) can change or cancel it afterwards
+    match /payments/prev {
+      allow read: if true;
+      allow write: if isAdmin();
+      allow delete: if isPrevPayer();
+    }
+    match /prevMarks/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+      allow create, update: if request.auth != null
+        && exists(/databases/$(database)/documents/payments/prev)
+        && request.resource.data.keys().hasOnly(['m', 'by', 'at'])
+        && request.resource.data.m in ['bit', 'cash', 'admin']
+        && (isPrevPlayer(id) || isPrevPayer());
+      allow delete: if request.auth != null
+        && exists(/databases/$(database)/documents/payments/prev)
+        && (isPrevPlayer(id) || isPrevPayer());
+    }
+    match /payments/{d} {
+      allow read: if true;
+      allow write: if isAdmin();
+      allow create, update: if request.auth != null && d == 'current' 
+        && exists(/databases/$(database)/documents/signups/$(request.auth.uid))
+        && request.resource.data.keys().hasOnly(['payer', 'link', 'price', 'at', 'paid', 'remindAt'])
+        && (resource == null || resource.data.get('payer', null) == null
+            || resource.data.payer.uid == request.auth.uid)
+        && (request.resource.data.get('payer', null) == null
+            || request.resource.data.payer.uid == request.auth.uid);
+    }
+    // "I paid" marks: the player himself (or his guest's host), the payer, or the organizer
+    match /payMarks/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+      allow create, update: if request.auth != null
+        && request.resource.data.keys().hasOnly(['m', 'by', 'at'])
+        && request.resource.data.m in ['bit', 'cash', 'admin', 'payer']
+        && (get(/databases/$(database)/documents/signups/$(id)).data.uid == request.auth.uid
+            || get(/databases/$(database)/documents/payments/current).data.payer.uid == request.auth.uid
+            || isPayerByName());
+      allow delete: if request.auth != null
+        && (get(/databases/$(database)/documents/signups/$(id)).data.uid == request.auth.uid
+            || get(/databases/$(database)/documents/payments/current).data.payer.uid == request.auth.uid
+            || isPayerByName());
+    }
+    // results: the organizer edits freely; any player may record mini-game wins
+    // for tonight's teams (only once teams are set, and without touching the MVP)
+    match /history/{d} {
+      allow read: if true;
+      allow write: if isAdmin();
+      allow create, update: if request.auth != null
+        && get(/databases/$(database)/documents/teams/current).data.status == "final"
+        && d == string(get(/databases/$(database)/documents/teams/current).data.at)
+        && request.resource.data.keys().hasOnly(['at', 'date', 'teams', 'mvp'])
+        && request.resource.data.teams is list
+        && request.resource.data.teams.size() <= 8
+        && request.resource.data.get('mvp', null) == (resource == null ? null : resource.data.get('mvp', null));
+    }
+    match /lates/{d}    { allow read, write: if isAdmin(); }
+    match /weeks/{d}    { allow read, write: if isAdmin(); }
+
+    // each device saves its own phone / push token; only the organizer reads phones
+    match /phones/{id} {
+      allow read: if isAdmin();
+      allow create, update: if request.auth != null && id == request.auth.uid
+        && request.resource.data.keys().hasOnly(['phone', 'name', 'v'])
+        // "v" (verified by SMS) is set only by the server
+        && request.resource.data.get('v', false) == (resource == null ? false : resource.data.get('v', false))
+        && (resource == null || resource.data.get('v', false) != true || request.resource.data.phone == resource.data.phone)
+        && request.resource.data.phone is string && request.resource.data.phone.size() <= 20
+        && (!('name' in request.resource.data) || (request.resource.data.name is string && request.resource.data.name.size() <= 40));
+      allow delete: if isAdmin() || (request.auth != null && id == request.auth.uid);
+      // an organizer may correct a player's name (not his phone)
+      allow update: if isAdmin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name']) && validName(request.resource.data);
+    }
+    // notification delivery log: written by the server, only the owner reads it
+    match /pushLog/{id} {
+      allow read: if isOwner();
+      allow write: if false;
+    }
+    // who each device belongs to (a name only), so organizers know who voted / gets notifications
+    match /who/{id} {
+      allow read: if isAdmin() || (request.auth != null && id == request.auth.uid);
+      allow create, update: if isAdmin() && request.resource.data.keys().hasOnly(['name', 'at']) && validName(request.resource.data);
+      allow create, update: if request.auth != null && id == request.auth.uid
+        && request.resource.data.keys().hasOnly(['name', 'at'])
+        && request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 40;
+      allow delete: if isAdmin() || (request.auth != null && id == request.auth.uid);
+    }
+    match /tokens/{id} {
+      allow read: if isOwner();
+      allow create, update: if request.auth != null && id == request.auth.uid
+        && request.resource.data.keys().hasOnly(['token', 'at', 'name'])
+        && request.resource.data.token is string && request.resource.data.token.size() < 400
+        && (!('name' in request.resource.data) || (request.resource.data.name is string && request.resource.data.name.size() <= 40));
+      allow delete: if request.auth != null && id == request.auth.uid;
+    }
+
+    match /signups/{id} {
+      allow read: if true;
+      allow create: if isAdmin() || (
+        // player signs up himself
+        request.auth != null
+        && id == request.auth.uid
+        && request.resource.data.keys().hasOnly(['name', 'ts', 'uid'])
+        && request.resource.data.uid == request.auth.uid
+        && validName(request.resource.data)
+        && request.resource.data.ts == request.time
+        && loginOk()
+        && (regOpen() || (prioOpen() && isPrioName(request.resource.data.name)))
+      ) || (
+        // one guest (+1) per registered player
+        request.auth != null
+        && id == request.auth.uid + '_g'
+        && request.resource.data.keys().hasOnly(['name', 'ts', 'uid', 'guestOf'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.guestOf == request.auth.uid
+        && validName(request.resource.data)
+        && request.resource.data.ts == request.time
+        && regOpen()
+        && loginOk()
+        && cfg().get('allowGuests', true) == true
+        && exists(/databases/$(database)/documents/signups/$(request.auth.uid))
+      );
+      allow update: if isAdmin();
+      allow delete: if isAdmin()
+        || (request.auth != null && resource.data.uid == request.auth.uid && !cancelLocked());
+    }
+
+    // one vote per device; only while voting is open
+    match /votes/{id} {
+      allow read: if true;
+      allow create, update: if request.auth != null
+        && id == request.auth.uid
+        && request.resource.data.keys().hasOnly(['choice', 'round'])
+        && request.resource.data.choice in [0, 1]
+        && request.resource.data.round is number
+        && loginOk()
+        && votingOpen();
+      allow delete: if isAdmin();
+    }
+
+    // MVP vote: one per device, only while open
+    // anonymous rating survey: everyone sees which players are in it, only the owner sees the averages
+    match /survey/current {
+      allow read: if true;
+      allow write: if isOwner();
+    }
+    match /survey/results {
+      allow read: if isOwner();
+      allow write: if false;
+    }
+    // each device writes only its own vote and nobody else can read it (the server averages them)
+    match /surveyVotes/{id} {
+      allow read: if request.auth != null && id == request.auth.uid;
+      allow create, update: if request.auth != null
+        && id == request.auth.uid
+        && get(/databases/$(database)/documents/survey/current).data.open == true
+        && request.resource.data.keys().hasOnly(['round', 'r'])
+        && request.resource.data.round == get(/databases/$(database)/documents/survey/current).data.round
+        && request.resource.data.r is map
+        && request.resource.data.r.size() <= 80
+        && (hasPhone() || isAdmin());
+      allow delete: if isOwner();
+    }
+    // MVP tally for organizers (counts and who voted, not for whom): written by the server
+    match /state/mvpTally {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+    match /mvpVotes/{id} {
+      // who voted for whom: only the main organizer (and each voter his own vote)
+      allow read: if isOwner() || (request.auth != null && id == request.auth.uid);
+      allow create, update: if request.auth != null
+        && id == request.auth.uid
+        && request.resource.data.keys().hasOnly(['name', 'round'])
+        && validName(request.resource.data)
+        && request.resource.data.round is number
+        && loginOk()
+        && mvpOpen()
+        // not for himself
+        && !(exists(/databases/$(database)/documents/who/$(request.auth.uid))
+             && myWhoName() == request.resource.data.name.lower())
+        && !(exists(/databases/$(database)/documents/signups/$(request.auth.uid))
+             && get(/databases/$(database)/documents/signups/$(request.auth.uid)).data.name.lower() == request.resource.data.name.lower());
+      allow delete: if isAdmin();
+    }
+  }
+}

@@ -1,0 +1,31 @@
+# Deploys the server code (Cloud Functions) and the security rules to Firebase
+# whenever they change on main. Secrets (GitHub → Settings → Secrets and variables → Actions):
+#   FIREBASE_SERVICE_ACCOUNT  – the JSON key of a Google Cloud service account that may deploy
+#   OWNER_EMAIL               – the main organizer's Google email (kept out of the public code)
+name: Deploy to Firebase
+on:
+  push:
+    branches: [main]
+    paths: ["functions/**", "firestore.rules", "firebase.json", ".github/workflows/deploy-firebase.yml"]
+  workflow_dispatch:
+concurrency: { group: firebase-deploy, cancel-in-progress: false }
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Install function dependencies
+        run: npm install --prefix functions
+      - name: Put the owner's email into the rules
+        env: { OWNER_EMAIL: "${{ secrets.OWNER_EMAIL }}" }
+        run: |
+          test -n "$OWNER_EMAIL" || { echo "OWNER_EMAIL secret is missing"; exit 1; }
+          sed -i "s/__OWNER_EMAIL__/${OWNER_EMAIL}/g" firestore.rules
+      - name: Deploy functions and rules
+        env: { SA: "${{ secrets.FIREBASE_SERVICE_ACCOUNT }}" }
+        run: |
+          echo "$SA" > "$RUNNER_TEMP/sa.json"
+          export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/sa.json"
+          npx --yes firebase-tools@latest deploy --only functions,firestore:rules --project teams-football --force --non-interactive
