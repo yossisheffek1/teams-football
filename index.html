@@ -567,7 +567,7 @@ async function checkAdmin(user){
     if(S.isOwner){
       lsSet("ownerDevice","1");   // this device belongs to the main admin: show him the account switcher
       onSnapshot(query(collection(db,"pushLog"),orderBy("at","desc"),limit(25)), q=>{ S.pushLog=q.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>b.at-a.at); render(); }, e=>console.warn("pushLog",e));
-      onSnapshot(collection(db,"tokens"), q=>{ S.tokens=q.docs.filter(d=>d.data().token).map(d=>({uid:d.id, name:d.data().name||"", at:d.data().at})); render(); }, ()=>{});
+      onSnapshot(collection(db,"tokens"), q=>{ S.tokens=q.docs.filter(d=>d.data().token).map(d=>({uid:d.id, name:d.data().name||"", at:d.data().at})); migrateNames(); render(); }, ()=>{});
       onSnapshot(surveyResRef, s=>{ S.surveyResults = s.exists()?s.data():null; render(); }, ()=>{});
       ratUnsub = onSnapshot(ratRef, s=>{ const d=s.exists()?s.data():{}; S.ratings=d.list||[];
         // one-time move of "not together" pairs to the organizers' shared doc
@@ -579,9 +579,9 @@ async function checkAdmin(user){
     ownerUnsub = onSnapshot(ownerRef, s=>{ const d=s.exists()?s.data():{}; S.admins={owner:d.owner||"", emails:d.emails||[]}; render(); }, ()=>{});
     registerAdminDevice();
     onSnapshot(testRef, s=>{ S.pushTest = s.exists()?s.data():{uids:[],names:[]}; render(); }, ()=>{});
-    onSnapshot(collection(db,"who"), q=>{ const m={}; q.docs.forEach(d=>{ if(d.data().name) m[d.id]=d.data().name; }); S.whoMap=m; render(); }, ()=>{});
+    onSnapshot(collection(db,"who"), q=>{ const m={}; q.docs.forEach(d=>{ if(d.data().name) m[d.id]=d.data().name; }); S.whoMap=m; migrateNames(); render(); }, ()=>{});
     // a listener stops for good after an error (e.g. while new rules are being published): try again
-    const listenPhones=(tries)=>onSnapshot(collection(db,"phones"), q=>{ const m={}, n={}; const v=new Set(); q.docs.forEach(d=>{ m[d.id]=d.data().phone; if(d.data().name) n[d.id]=d.data().name; if(d.data().v) v.add(d.id); }); S.phones=m; S.phoneNames=n; S.phoneV=v; S.phonesErr=null; render(); },
+    const listenPhones=(tries)=>onSnapshot(collection(db,"phones"), q=>{ const m={}, n={}; const v=new Set(); q.docs.forEach(d=>{ m[d.id]=d.data().phone; if(d.data().name) n[d.id]=d.data().name; if(d.data().v) v.add(d.id); }); S.phones=m; S.phoneNames=n; S.phoneV=v; S.phonesErr=null; migrateNames(); render(); },
       e=>{ console.warn("phones",e); S.phonesErr=String(e&&e.code||e); render(); if(tries<5) setTimeout(()=>listenPhones(tries+1), 3000*(tries+1)); });
     listenPhones(0);
     onSnapshot(collection(db,"weeks"), q=>{ S.weeks=q.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(a.date||a.at)-(b.date||b.at)); render(); }, ()=>{});
@@ -594,7 +594,7 @@ onAuthStateChanged(auth, async user=>{
   if(!user){ try{ await signInAnonymously(auth); }catch(e){ fail(e); } return; }
   const first=!S.uid; S.uid = user.uid; S.authPhone = user.phoneNumber || null;
   if(S.authPhone && !lsGet("myName")) identifyMe();
-  if(S.authPhone) getDoc(doc(db,"who",user.uid)).then(d=>{ const n=d.exists()&&d.data().name; if(n && n!==lsGet("myName")){ lsSet("myName",n); render(); } }).catch(()=>{});
+  getDoc(doc(db,"who",user.uid)).then(d=>{ const n=d.exists()&&d.data().name; if(n && n!==lsGet("myName")){ lsSet("myName",n); render(); } }).catch(()=>{});
   if(first){ initPush(); }
   getDoc(doc(db,"surveyVotes",user.uid)).then(d=>{ S.myVote = d.exists()?d.data():null; render(); }).catch(()=>{});
   await checkAdmin(user);
@@ -710,7 +710,7 @@ async function voteMvp(name){
 function nameOfUid(uid){
   const su=S.signups.find(x=>x.uid===uid && x.id===uid); if(su) return su.name;
   if((S.whoMap||{})[uid]) return S.whoMap[uid];
-  if((S.phoneNames||{})[uid]) return S.phoneNames[uid];
+  if((S.phoneNames||{})[uid]) return S.phoneNames[uid];   // older data, before names moved to "who"
   const t=(S.tokens||[]).find(x=>x.uid===uid && x.name); if(t) return t.name;
   return "";
 }
@@ -1297,8 +1297,7 @@ async function refreshToken(interactive){
     const reg=await navigator.serviceWorker.register("firebase-messaging-sw.js",{scope:"./"});
     const token=await getToken(messaging,{vapidKey:VAPID_KEY, serviceWorkerRegistration:reg});
     if(!token) throw new Error("no token");
-    const nm=clean(lsGet("myName"));
-    if(S.uid && (token!==lsGet("pushToken:"+S.uid) || nm!==lsGet("pushName:"+S.uid))){ await setDoc(doc(db,"tokens",S.uid),nm?{token, name:nm, at:serverTimestamp()}:{token, at:serverTimestamp()}); lsSet("pushToken:"+S.uid, token); lsSet("pushName:"+S.uid, nm); }
+    if(S.uid && token!==lsGet("pushToken:"+S.uid)){ await setDoc(doc(db,"tokens",S.uid),{token, at:serverTimestamp()}); lsSet("pushToken:"+S.uid, token); }
     lsSet("pushOn","1"); S.pushState="on"; S.myToken=token; render();
     if(S.isAdmin) registerAdminDevice();
     if(interactive) toast("🔔 התראות הופעלו!");
@@ -1603,16 +1602,6 @@ async function submitVote(){
   if(ok){ S.myVote={round:sv.round, r}; S.surveyOpenUI=false; render(); }
 }
 function surveyText(){ return `⭐ סקר דירוגים אנונימי לכדורגל!\nדרגו את השחקנים מ-1 עד ${RATING_MAX}. אף אחד לא רואה מה כל אחד דירג, רק ממוצע.\n${pageUrl()}#survey`; }
-const surveyKnown = () => !!((lsGet("phoneSaved") && lsGet("phoneNamed")) || mySignup());
-async function surveyJoin(){
-  const name=clean(S.draft.survMe ?? lsGet("myName")), ph=normPhone(S.draft.survPh ?? lsGet("myPhone"));
-  if(!name){ toast("כתוב את השם שלך"); return; }
-  if(!ph){ toast("כתוב מספר טלפון תקין"); return; }
-  if(!S.uid){ toast("רגע, מתחבר…"); return; }
-  lsSet("myName",name); lsSet("myPhone",ph); saveWho(name);
-  const ok=await run(()=>setDoc(doc(db,"phones",S.uid),{phone:ph, name}));
-  if(ok){ lsSet("phoneSaved",ph); lsSet("phoneNamed",name); delete S.draft.survMe; delete S.draft.survPh; S.survGate=false; toast(`✔ נשמר: ${name}`); render(); if(messaging && S.pushState==="on") refreshToken(false); }
-}
 function surveyCard(){
   const sv=S.survey; if(!sv||!sv.open) return null;
   const voted=S.myVote && S.myVote.round===sv.round;
@@ -1620,14 +1609,10 @@ function surveyCard(){
     h("b",null,"⭐ סקר דירוגים אנונימי"), h("span",null, voted?"✔ דירגת · לחץ כדי לעדכן":"עזור לאזן את הכוחות: דרג את השחקנים"));
   if(!S.isAdmin && !loggedIn()) return loginCard("כדי לדרג צריך להתחבר פעם אחת עם הטלפון. הדירוג נשאר אנונימי.");
   if(!S.isAdmin && loggedIn() && !lsGet("myName")) return loginCard();
-  if((S.isAdmin && !surveyKnown()) || S.survGate) return h("div",{class:"card surv"},
+  if(S.isAdmin && !lsGet("myName")) return h("div",{class:"card surv"},
     h("h2",null,"⭐ סקר דירוגים"),
-    h("div",{class:"hint"},"פעם ראשונה כאן? כתוב שם וטלפון ותוכל לדרג. הפרטים נשמרים בנפרד מהדירוג, כך שהדירוג נשאר אנונימי."),
-    h("input",{id:"f_survMe",type:"text",class:"phone-in",placeholder:"השם שלך (כמו בקבוצה)",autocomplete:"name",value:S.draft.survMe ?? lsGet("myName") ?? "",oninput:e=>{S.draft.survMe=e.target.value;}}),
-    h("input",{id:"f_survPh",type:"tel",class:"phone-in",placeholder:"📱 טלפון",autocomplete:"tel",inputmode:"tel",dir:"ltr",style:"margin-top:8px",value:S.draft.survPh ?? prettyPhone(lsGet("myPhone")),oninput:e=>{S.draft.survPh=e.target.value;}}),
-    h("div",{class:"share",style:"margin-top:12px"},
-      h("button",{class:"btn ghost",onclick:()=>{S.surveyOpenUI=false;render();}},"סגור"),
-      h("button",{class:"btn",onclick:surveyJoin},"המשך לסקר")));
+    h("div",{class:"hint"},"כדי לדרג בשמך (ולא לדרג את עצמך), חבר קודם את הטלפון שלך."),
+    h("button",{class:"btn ghost full",style:"margin-top:8px",onclick:needMyName},"📱 חבר את הטלפון שלי"));
   const me=norm(lsGet("myName")), d=S.voteDraft||(S.voteDraft={});
   const names=(sv.names||[]).filter(n=>norm(n)!==me);
   return h("div",{class:"card surv"},
@@ -1733,14 +1718,24 @@ function loginSettingsCard(){
 async function renameAccount(uid, name){
   name=clean(name); if(!name){ toast("כתוב שם"); return; }
   S.renameUid=null; render();
-  await run(async()=>{ await setDoc(doc(db,"who",uid),{name, at:Date.now()}); await updateDoc(doc(db,"phones",uid),{name}); }, `✔ השם עודכן ל${name}`);
+  await run(()=>setDoc(doc(db,"who",uid),{name, at:Date.now()}), `✔ השם עודכן ל${name}`);
+}
+
+function migrateNames(){
+  if(!S.isOwner || lsGet("namesMigrated") || !S.whoMap || !S.tokens || !S.phoneV) return;   // wait until all three lists loaded
+  const batch=writeBatch(db); let n=0;
+  const add=(uid,name)=>{ if(name && !S.whoMap[uid]){ S.whoMap[uid]=name; batch.set(doc(db,"who",uid),{name, at:Date.now()}); n++; } };
+  Object.entries(S.phoneNames).forEach(([uid,name])=>add(uid,name));
+  S.tokens.forEach(t=>add(t.uid,t.name));
+  if(!n){ lsSet("namesMigrated","1"); return; }
+  batch.commit().then(()=>lsSet("namesMigrated","1")).catch(e=>console.warn("migrate names",e));
 }
 
 // ---------- who has notifications on (owner) ----------
 function pushPeople(){
   const toks=S.tokens||[], byUid=new Set(toks.map(t=>t.uid));
   const nameOf=uid=>{ const t=toks.find(x=>x.uid===uid); const s=S.signups.find(x=>x.uid===uid && x.id===uid);
-    return (t&&t.name) || (S.whoMap||{})[uid] || (S.phoneNames||{})[uid] || (s&&s.name) || ""; };
+    return (S.whoMap||{})[uid] || (s&&s.name) || (S.phoneNames||{})[uid] || (t&&t.name) || ""; };
   const on=toks.map(t=>({uid:t.uid, name:nameOf(t.uid)})).sort((a,b)=>(a.name||"תתת").localeCompare(b.name||"תתת","he"));
   const off=S.signups.filter(s=>s.uid && s.id===s.uid && !byUid.has(s.uid)).map(s=>s.name);
   return {on, off};
@@ -1876,8 +1871,6 @@ async function identifyMe(){
 async function setAccountName(name){
   name=clean(name); if(!name){ toast("כתוב את השם שלך"); return; }
   lsSet("myName",name); lsSet("whoDone","1"); saveWho(name);
-  try{ await updateDoc(doc(db,"phones",S.uid),{name}); }catch(e){ console.warn("phones name",e); }
-  if(messaging && S.pushState==="on") refreshToken(false);
   toast(`✔ שלום ${name}!`); setTimeout(()=>location.reload(),900);
 }
 function namePicker(onPick){
@@ -2400,17 +2393,15 @@ function optionBlock(opt, idx, mode){
     mode==="vote" ? h("button",{class:"btn full big"+(mine?" chosen":""),style:"margin-top:10px",onclick:()=>vote(idx)}, mine?`✔ הצבעת ל${OPT_NAMES[idx]}`:`אני בעד ${OPT_NAMES[idx]}`) : null,
     // an organizer who plays votes too (with the name he has on the list)
     mode==="admin" && voting ? h("button",{class:"btn ghost full"+(mine?" chosen":""),style:"margin-top:10px",onclick:()=>adminVote(idx)}, mine?`✔ הצבעת ל${OPT_NAMES[idx]}`:`🙋 גם אני משחק: אני בעד ${OPT_NAMES[idx]}`) : null,
-    mode==="admin" && voting && S.adminVotePick===idx ? h("div",{class:"aliasbox"},
-      h("div",{class:"hint"},"מה השם שלך ברשימה? (פעם אחת)"),
-      h("div",{class:"chips"},S.signups.slice(0,S.cfg.capacity).filter(x=>!x.guestOf).map(x=>h("button",{class:"chip",onclick:()=>{ lsSet("myName",x.name); saveWho(x.name); S.adminVotePick=null; adminVote(idx); }},x.name)))) : null,
+
     mode==="admin" ? h("div",null,
       h("div",{class:"hint",style:"margin-top:10px"}, S.teams.options.length>1 ? "שליחת האופציה הזו בנפרד:" : "שליחה:"),
       imageShare("opt"+idx, optionText(idx)),
       h("button",{class:"btn full",style:"margin-top:8px",onclick:()=>setStatus("final",idx)}, S.teams.options.length>1?`✔ קבע את ${OPT_NAMES[idx]}`:"✔ קבע את החלוקה")) : null);
 }
+function needMyName(){ toast("כדי להצביע בשמך, חבר קודם את הטלפון שלך (כרטיס ״📱 חבר את הטלפון שלך״ ברשימה)"); S.admLinkLater=false; S.tab="list"; render(); window.scrollTo({top:0,behavior:"smooth"}); }
 function adminVote(idx){
-  if(!lsGet("myName")){ S.adminVotePick=idx; render(); return; }
-  saveWho(lsGet("myName"));
+  if(!lsGet("myName")) return needMyName();
   vote(idx);
 }
 function splitControls(){
@@ -2478,11 +2469,11 @@ function mvpCard(opt){
         // an organizer who played votes like everyone (not for himself)
         (()=>{ const me=lsGet("myName"), mine=myMvpVote();
           if(!me) return h("div",{class:"aliasbox",style:"margin-top:10px"},
-            h("div",{class:"hint"},"🙋 שיחקת? מה השם שלך ברשימה? (פעם אחת, כדי להצביע)"),
-            h("div",{class:"chips"},names.map(n=>h("button",{class:"chip",onclick:()=>{ lsSet("myName",n); saveWho(n); render(); }},n))));
+            h("div",{class:"hint"},"🙋 שיחקת? כדי להצביע בשמך, חבר קודם את הטלפון שלך."),
+            h("button",{class:"btn ghost full",onclick:needMyName},"📱 חבר את הטלפון שלי"));
           return h("div",{class:"aliasbox",style:"margin-top:10px"},
             h("div",{class:"hint"}, mine?`🙋 הצבעת ל${mine}. אפשר לשנות עד הסגירה.`:"🙋 גם אני שיחקתי, ההצבעה שלי:"),
-            h("div",{class:"chips"},names.filter(n=>norm(n)!==norm(me)).map(n=>h("button",{class:"chip"+(mine===n?" on":""),onclick:()=>{ saveWho(me); voteMvp(n); }},(mine===n?"⭐ ":"")+n)))); })(),
+            h("div",{class:"chips"},names.filter(n=>norm(n)!==norm(me)).map(n=>h("button",{class:"chip"+(mine===n?" on":""),onclick:()=>voteMvp(n)},(mine===n?"⭐ ":"")+n)))); })(),
         h("div",{class:"hint",style:"margin-top:10px"},"שלח לקבוצה קישור להצבעה:"),
         shareRow(mvpCallText()),
         h("button",{class:"btn full",style:"margin-top:10px",onclick:closeMvp},"סגור עכשיו והכרז"));
@@ -2793,7 +2784,7 @@ function knownNames(){
   const add=n=>{ if(n && !m.has(norm(n))) m.set(norm(n),n); };
   S.ratings.forEach(r=>add(r.n)); S.signups.forEach(s=>add(s.name)); S.weeks.forEach(w=>(w.players||[]).concat(w.waiting||[]).forEach(add));
   S.history.forEach(g=>(g.teams||[]).forEach(t=>(t.players||[]).concat(t.subs||[]).forEach(add)));
-  Object.values(S.phoneNames||{}).forEach(add); S.lates.forEach(x=>add(x.n));
+  Object.values(S.phoneNames||{}).forEach(add); Object.values(S.whoMap||{}).forEach(add); S.lates.forEach(x=>add(x.n));
   (S.cfg.priority||[]).forEach(p=>{ if(!m.has(p)) add(p); });
   const hidden=new Set(S.cfg.hiddenNames||[]);
   [...m.keys()].forEach(k=>{ if(hidden.has(k)) m.delete(k); });
@@ -2849,7 +2840,7 @@ function contactsList(){
     const cur=m.get(k); if(!cur || (!cur.name && name)) m.set(k,{name:name||"", phone:ph, src}); };
   Object.entries(S.phones||{}).forEach(([uid,ph])=>{
     const su=S.signups.find(s=>s.uid===uid && !s.guestOf);
-    add((S.phoneNames||{})[uid] || (su&&su.name) || "", ph, "self");
+    add((S.whoMap||{})[uid] || (S.phoneNames||{})[uid] || (su&&su.name) || "", ph, "self");
   });
   S.ratings.forEach(r=>{ if(r.phone) add(r.n, r.phone, "roster"); });
   return [...m.values()].sort((a,b)=>(a.name?0:1)-(b.name?0:1) || a.name.localeCompare(b.name,"he"));

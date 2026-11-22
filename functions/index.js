@@ -111,11 +111,12 @@ async function applyMode(msgs) {
 // names for a set of player ids (for the delivery log)
 async function namesFor() {
   const [t, p, s, w] = await Promise.all([db.collection("tokens").get(), db.collection("phones").get(), db.collection("signups").get(), db.collection("who").get()]);
+  // a player's name lives in who/{uid}; older copies (tokens, phones) and this week's sign-up are fallbacks
   const m = new Map();
-  w.docs.forEach((d) => { if (d.data().name) m.set(d.id, d.data().name); });
-  s.docs.forEach((d) => { const x = d.data(); if (x.uid && !x.guestOf && x.name && d.id === x.uid) m.set(x.uid, x.name); });
-  p.docs.forEach((d) => { if (d.data().name) m.set(d.id, d.data().name); });
   t.docs.forEach((d) => { if (d.data().name) m.set(d.id, d.data().name); });
+  p.docs.forEach((d) => { if (d.data().name) m.set(d.id, d.data().name); });
+  s.docs.forEach((d) => { const x = d.data(); if (x.uid && !x.guestOf && x.name && d.id === x.uid) m.set(x.uid, x.name); });
+  w.docs.forEach((d) => { if (d.data().name) m.set(d.id, d.data().name); });
   return m;
 }
 
@@ -243,14 +244,10 @@ async function announceOpen(cfg, key) {
 async function prioTokens(cfg) {
   const prio = new Set((cfg.priority || []).map(norm));
   if (!prio.size) return [];
-  const [tsnap, psnap, signups, wsnap] = await Promise.all([db.collection("tokens").get(), db.collection("phones").get(), getSignups(), db.collection("who").get()]);
-  const nameOf = new Map();
-  signups.forEach((s) => { if (s.uid && !s.guestOf && s.name) nameOf.set(s.uid, s.name); });
-  psnap.docs.forEach((d) => { if (d.data().name) nameOf.set(d.id, d.data().name); });
-  wsnap.docs.forEach((d) => { if (d.data().name) nameOf.set(d.id, d.data().name); });
+  const [tsnap, nameOf] = await Promise.all([db.collection("tokens").get(), namesFor()]);
   return tsnap.docs.filter((d) => d.data().token)
-    .filter((d) => prio.has(norm(d.data().name || nameOf.get(d.id) || "")))
-    .map((d) => ({ uid: d.id, token: d.data().token, ref: d.ref, name: d.data().name || nameOf.get(d.id) || "" }));
+    .filter((d) => prio.has(norm(nameOf.get(d.id) || "")))
+    .map((d) => ({ uid: d.id, token: d.data().token, ref: d.ref, name: nameOf.get(d.id) || "" }));
 }
 async function announcePrio(cfg, key) {
   const ref = db.doc("state/notify");
@@ -609,6 +606,16 @@ function normPhoneIL(p) {
   if (d.startsWith("0")) d = "972" + d.slice(1);
   return d;
 }
+// a name known for this phone from another account/device (who/{uid} first, then older copies)
+async function nameByPhone(phone) {
+  const ps = await db.collection("phones").where("phone", "==", phone).get();
+  for (const d of ps.docs) {
+    const w = await db.doc(`who/${d.id}`).get();
+    if (w.exists && w.data().name) return w.data().name;
+  }
+  const o = ps.docs.find((d) => d.data().name);
+  return o ? o.data().name : "";
+}
 exports.identify = onCall(async (req) => {
   const phone = normPhoneIL(req.auth && req.auth.token && req.auth.token.phone_number);
   if (!phone) throw new HttpsError("unauthenticated", "no verified phone");
@@ -618,15 +625,12 @@ exports.identify = onCall(async (req) => {
   const hit = ((rd.exists && rd.data().list) || []).find((x) => x && x.phone && normPhoneIL(x.phone) === phone);
   if (hit) name = hit.n;
   if (!name) {
-    const ps = await db.collection("phones").where("phone", "==", phone).get();
-    const other = ps.docs.find((d) => d.data().name);
-    if (other) name = other.data().name;
-  }
-  if (!name) {
     const w = await db.doc(`who/${uid}`).get();
     if (w.exists && w.data().name) name = w.data().name;
   }
-  await db.doc(`phones/${uid}`).set(name ? { phone, name, v: true } : { phone, v: true }, { merge: true });
+  if (!name) name = await nameByPhone(phone);
+  await db.doc(`phones/${uid}`).set({ phone, v: true }, { merge: true });
+  if (name) await db.doc(`who/${uid}`).set({ name, at: Date.now() });
   return { name };
 });
 
@@ -676,8 +680,8 @@ exports.adoptPhone = onCall(async (req) => {
   const hit = ((rd.exists && rd.data().list) || []).find((x) => x && x.phone && normPhoneIL(x.phone) === phone);
   if (hit) name = hit.n;
   if (!name) { const w = await db.doc(`who/${me}`).get(); if (w.exists && w.data().name) name = w.data().name; }
-  if (!name) { const ps = await db.collection("phones").where("phone", "==", phone).get(); const o = ps.docs.find((d) => d.data().name); if (o) name = o.data().name; }
-  await db.doc(`phones/${me}`).set(name ? { phone, name, v: true } : { phone, v: true }, { merge: true });
+  if (!name) name = await nameByPhone(phone);
+  await db.doc(`phones/${me}`).set({ phone, v: true }, { merge: true });
   if (name) await db.doc(`who/${me}`).set({ name, at: Date.now() });
   return { name };
 });
