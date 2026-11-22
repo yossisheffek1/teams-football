@@ -376,6 +376,7 @@
   details[open] > .secsum::after{content:"▴"}
   .stats-t td.tn.click{cursor:pointer;text-decoration:underline dotted}
   .stats-t td.tn.sel{color:var(--wait)}
+  .stats-t th.thwrap{white-space:normal;line-height:1.15;font-size:12px;max-width:58px}
 </style>
 </head>
 <body>
@@ -1254,12 +1255,12 @@ function buildStatsCanvas(rows){
   const sub=`${S.history.length} ערבים · ${new Date().toLocaleDateString("he-IL",{day:"numeric",month:"numeric",year:"numeric"})}`;
   ctx.fillStyle="rgba(255,255,255,.78)"; setFont(ctx,500,30); ctx.fillText(sub,W/2,112);
   // columns, right to left: # | name | games | wins | crown | mvp
-  const x0=W-PAD, cols=[{k:"#",w:90},{k:"שחקן",w:420},{k:"ערבים",w:120},{k:"ניצחונות",w:150},{k:"👑",w:100},{k:"⭐",w:112}];
+  const x0=W-PAD, cols=[{k:"#",w:80},{k:"שחקן",w:360},{k:"ערבים",w:110},{k:"ניצחונות",w:140},{k:"קבוצה מנצחת",w:200},{k:"⭐",w:102}];
   let cx=x0; cols.forEach(c=>{ c.x=cx-c.w/2; c.r=cx; cx-=c.w; });
   const top=TOP, tw=W-2*PAD;
   ctx.save(); rrect(ctx,PAD,top,tw,HEAD+rows.length*ROW,22); ctx.fillStyle="#fff"; ctx.fill(); ctx.clip();
   ctx.fillStyle="#14201a"; ctx.fillRect(PAD,top,tw,HEAD);
-  ctx.fillStyle="#fff"; cols.forEach(c=>{ setFont(ctx,800,30); ctx.textAlign=c.k==="שחקן"?"right":"center"; ctx.fillText(c.k,c.k==="שחקן"?c.r-14:c.x,top+HEAD/2+2); });
+  ctx.fillStyle="#fff"; cols.forEach(c=>{ setFont(ctx,800,c.k.length>8?26:30); ctx.textAlign=c.k==="שחקן"?"right":"center"; ctx.fillText(c.k,c.k==="שחקן"?c.r-14:c.x,top+HEAD/2+2); });
   rows.forEach((s,i)=>{
     const y=top+HEAD+i*ROW;
     ctx.fillStyle=i<3?"#fff6d6":(i%2?"#f4f7f2":"#fff"); ctx.fillRect(PAD,y,tw,ROW);
@@ -1270,7 +1271,7 @@ function buildStatsCanvas(rows){
   });
   ctx.restore();
   ctx.textAlign="center"; ctx.fillStyle="#6b776f"; setFont(ctx,500,24);
-  ctx.fillText("ניצחונות = משחקים שהקבוצה שלך ניצחה · 👑 = הקבוצה הכי טובה בערב · ⭐ = MVP",W/2,H-76);
+  ctx.fillText("קבוצה מנצחת = ערבים שהקבוצה שלך סיימה ראשונה · ⭐ = MVP",W/2,H-76);
   setFont(ctx,500,26); ctx.fillText("⚽ כדורגל שבועי",W/2,H-36);
   return cv;
 }
@@ -2677,14 +2678,14 @@ function viewStats(){
   out.push(h("div",{class:"card"},
     h("h2",null,"🏆 טבלת העונה",h("span",{class:"count"},`${S.history.length} ערבים`)),
     h("table",{class:"stats-t"},
-      h("thead",null,h("tr",null,h("th",null,"#"),h("th",{class:"tn"},"שחקן"),h("th",null,"ערבים"),h("th",null,"ניצחונות"),h("th",null,"👑"),h("th",null,"⭐"))),
+      h("thead",null,h("tr",null,h("th",null,"#"),h("th",{class:"tn"},"שחקן"),h("th",null,"ערבים"),h("th",null,"ניצחונות"),h("th",{class:"thwrap"},"קבוצה מנצחת"),h("th",null,"⭐"))),
       h("tbody",null,st.map((s,i)=>h("tr",{class:i<3?"top":""},
         h("td",null,medal(i)),h("td",{class:"tn"+(S.mergeMode?" click":"")+(S.mergeFrom===s.name?" sel":""),onclick:S.mergeMode?()=>{ S.mergeFrom=S.mergeFrom===s.name?null:s.name; render(); }:null},S.mergeMode?`✏️ ${s.name}`:s.name),h("td",null,s.games),h("td",null,h("b",null,s.wins)),h("td",null,s.best),h("td",null,s.mvp||""))))),
     h("div",{style:"margin-top:10px"},imageShare("stats", statsText())),
     S.isAdmin ? mergeBox(st) : null,
     S.isAdmin ? h("button",{class:"linkbtn",style:"margin-top:8px",onclick:()=>{ S.mergeMode=!S.mergeMode; S.mergeFrom=null; render(); }},S.mergeMode?"✔ סיימתי לערוך שמות":"✏️ איחוד ושינוי שמות (שחקן שמופיע פעמיים)") : null,
     S.mergeMode && !S.mergeFrom ? h("div",{class:"hint"},"לחץ על השם הלא נכון בטבלה (למשל ״אורן״), ואז בחר את השם הנכון (״אורן לוי״).") : null,
-    h("div",{class:"hint",style:"margin-top:8px"},"ניצחונות = כמה משחקים הקבוצה שלך ניצחה. 👑 = ערבים שהקבוצה שלך הייתה הכי טובה. ⭐ = MVP.")));
+    h("div",{class:"hint",style:"margin-top:8px"},"ניצחונות = כמה משחקים הקבוצה שלך ניצחה. קבוצה מנצחת = ערבים שהקבוצה שלך סיימה ראשונה. ⭐ = MVP.")));
   out.push(h("div",{class:"card"},
     h("h2",null,"📜 משחקים קודמים"),
     S.isAdmin ? h("div",{class:"hint",style:"margin-bottom:4px"},"✏️ לעריכת תוצאה או MVP · 🗑 למחיקת ערב (רק אתה רואה את הכפתורים)") : null,
