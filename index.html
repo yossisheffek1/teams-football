@@ -374,6 +374,8 @@
   .secsum::-webkit-details-marker{display:none}
   .secsum::after{content:"▾";color:var(--muted);font-size:13px;margin-inline-start:auto}
   details[open] > .secsum::after{content:"▴"}
+  .stats-t td.tn.click{cursor:pointer;text-decoration:underline dotted}
+  .stats-t td.tn.sel{color:var(--wait)}
 </style>
 </head>
 <body>
@@ -2585,6 +2587,49 @@ function viewTeams(){
 }
 
 // --- stats view ---
+// ---------- merge / rename a player everywhere (table, attendance, payments, lists) ----------
+async function mergePlayer(from, to){
+  from=clean(from); to=clean(to);
+  if(!from || !to || norm(from)===norm(to)) return;
+  if(!confirm(`לאחד את "${from}" לתוך "${to}"?\nכל התוצאות, הנוכחות וה-MVP של "${from}" יעברו ל"${to}".`)) return;
+  const sw=n=>norm(n)===norm(from)?to:n, swl=a=>[...new Set((a||[]).map(sw))];
+  const batch=writeBatch(db); let n=0;
+  S.history.forEach(g=>{
+    const has=JSON.stringify(g).includes(from); if(!has) return;
+    const mv=Array.isArray(g.mvp)?swl(g.mvp):(g.mvp?sw(g.mvp):g.mvp);
+    const rec={...g, teams:(g.teams||[]).map(t=>({...t, players:swl(t.players), subs:swl(t.subs)})), mvp:mv??null}; delete rec.id;
+    batch.set(doc(db,"history",g.id),rec); n++;
+  });
+  S.weeks.forEach(w=>{
+    const has=JSON.stringify(w).includes(from); if(!has) return;
+    const rec={...w, players:swl(w.players), waiting:swl(w.waiting)}; delete rec.id;
+    if(w.pay) rec.pay={...w.pay, payer:sw(w.pay.payer||""), paid:(w.pay.paid||[]).map(x=>({...x,n:sw(x.n)})), unpaid:swl(w.pay.unpaid)};
+    batch.set(doc(db,"weeks",w.id),rec); n++;
+  });
+  if(S.lates.some(x=>norm(x.n)===norm(from))){ batch.set(latesRef,{list:S.lates.map(x=>({...x,n:sw(x.n)}))}); n++; }
+  const pr=S.cfg.priority||[];
+  if(pr.some(x=>norm(x)===norm(from))){ batch.update(cfgRef,{priority:[...new Set(pr.map(x=>norm(x)===norm(from)?norm(to):x))]}); n++; }
+  if(S.isOwner && S.ratings.some(r=>norm(r.n)===norm(from))){
+    const keep=S.ratings.find(r=>norm(r.n)===norm(to)), old=S.ratings.find(r=>norm(r.n)===norm(from));
+    const list=S.ratings.filter(r=>norm(r.n)!==norm(from)).concat(keep?[]:[{...old, n:to}]);
+    if(keep && !keep.phone && old.phone) list.splice(list.indexOf(keep),1,{...keep, phone:old.phone});
+    batch.set(ratRef,{list}); n++;
+  }
+  if(!n){ toast("לא נמצא מה לאחד"); return; }
+  S.mergeFrom=null; render();
+  await run(()=>batch.commit(),`✔ "${from}" אוחד לתוך "${to}"`);
+}
+function mergeBox(st){
+  if(!S.mergeFrom) return null;
+  const others=st.map(x=>x.name).filter(n=>norm(n)!==norm(S.mergeFrom));
+  return h("div",{class:"aliasbox",style:"margin-top:10px"},
+    h("div",{class:"hint"},`"${S.mergeFrom}" הוא בעצם... (בחר את השם הנכון, או כתוב שם חדש)`),
+    h("div",{class:"chips"},others.map(n=>h("button",{class:"chip",onclick:()=>mergePlayer(S.mergeFrom,n)},n))),
+    h("div",{class:"addrow",style:"margin-top:8px"},
+      h("input",{id:"f_mergeTo",type:"text",placeholder:"או שם חדש (שינוי שם)",value:S.draft.mergeTo||"",oninput:e=>{S.draft.mergeTo=e.target.value;}}),
+      h("button",{class:"btn",onclick:()=>{ const t=S.draft.mergeTo; delete S.draft.mergeTo; mergePlayer(S.mergeFrom,t||""); }},"שמור")),
+    h("button",{class:"linkbtn muted",onclick:()=>{ S.mergeFrom=null; render(); }},"ביטול"));
+}
 function viewStats(){
   const st=computeStats(), out=[];
   if(!st.length){
@@ -2597,7 +2642,10 @@ function viewStats(){
     h("table",{class:"stats-t"},
       h("thead",null,h("tr",null,h("th",null,"#"),h("th",{class:"tn"},"שחקן"),h("th",null,"ערבים"),h("th",null,"ניצחונות"),h("th",null,"👑"),h("th",null,"⭐"))),
       h("tbody",null,st.map((s,i)=>h("tr",{class:i<3?"top":""},
-        h("td",null,medal(i)),h("td",{class:"tn"},s.name),h("td",null,s.games),h("td",null,h("b",null,s.wins)),h("td",null,s.best),h("td",null,s.mvp||""))))),
+        h("td",null,medal(i)),h("td",{class:"tn"+(S.mergeMode?" click":"")+(S.mergeFrom===s.name?" sel":""),onclick:S.mergeMode?()=>{ S.mergeFrom=S.mergeFrom===s.name?null:s.name; render(); }:null},S.mergeMode?`✏️ ${s.name}`:s.name),h("td",null,s.games),h("td",null,h("b",null,s.wins)),h("td",null,s.best),h("td",null,s.mvp||""))))),
+    S.isAdmin ? mergeBox(st) : null,
+    S.isAdmin ? h("button",{class:"linkbtn",style:"margin-top:8px",onclick:()=>{ S.mergeMode=!S.mergeMode; S.mergeFrom=null; render(); }},S.mergeMode?"✔ סיימתי לערוך שמות":"✏️ איחוד ושינוי שמות (שחקן שמופיע פעמיים)") : null,
+    S.mergeMode && !S.mergeFrom ? h("div",{class:"hint"},"לחץ על השם הלא נכון בטבלה (למשל ״אורן״), ואז בחר את השם הנכון (״אורן לוי״).") : null,
     h("div",{class:"hint",style:"margin-top:8px"},"ניצחונות = כמה משחקים הקבוצה שלך ניצחה. 👑 = ערבים שהקבוצה שלך הייתה הכי טובה. ⭐ = MVP.")));
   out.push(h("div",{class:"card"},
     h("h2",null,"📜 משחקים קודמים"),
