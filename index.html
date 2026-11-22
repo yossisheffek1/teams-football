@@ -1242,21 +1242,58 @@ function buildCanvas(title, sections){
   ctx.fillText("⚽ כדורגל שבועי",W/2,H-38);
   return cv;
 }
+// the season table as an image
+function buildStatsCanvas(rows){
+  const W=1080, PAD=44, TOP=176, HEAD=70, ROW=64;
+  const H=TOP+HEAD+rows.length*ROW+110;
+  const cv=document.createElement("canvas"); cv.width=W; cv.height=H;
+  const ctx=cv.getContext("2d"); ctx.direction="rtl"; ctx.textBaseline="middle";
+  ctx.fillStyle="#f2f4ef"; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle="#0e3b25"; ctx.fillRect(0,0,W,TOP-34);
+  ctx.textAlign="center"; ctx.fillStyle="#fff"; setFont(ctx,900,58); ctx.fillText("🏆 טבלת העונה",W/2,62);
+  const sub=`${S.history.length} ערבים · ${new Date().toLocaleDateString("he-IL",{day:"numeric",month:"numeric",year:"numeric"})}`;
+  ctx.fillStyle="rgba(255,255,255,.78)"; setFont(ctx,500,30); ctx.fillText(sub,W/2,112);
+  // columns, right to left: # | name | games | wins | crown | mvp
+  const x0=W-PAD, cols=[{k:"#",w:90},{k:"שחקן",w:420},{k:"ערבים",w:120},{k:"ניצחונות",w:150},{k:"👑",w:100},{k:"⭐",w:112}];
+  let cx=x0; cols.forEach(c=>{ c.x=cx-c.w/2; c.r=cx; cx-=c.w; });
+  const top=TOP, tw=W-2*PAD;
+  ctx.save(); rrect(ctx,PAD,top,tw,HEAD+rows.length*ROW,22); ctx.fillStyle="#fff"; ctx.fill(); ctx.clip();
+  ctx.fillStyle="#14201a"; ctx.fillRect(PAD,top,tw,HEAD);
+  ctx.fillStyle="#fff"; cols.forEach(c=>{ setFont(ctx,800,30); ctx.textAlign=c.k==="שחקן"?"right":"center"; ctx.fillText(c.k,c.k==="שחקן"?c.r-14:c.x,top+HEAD/2+2); });
+  rows.forEach((s,i)=>{
+    const y=top+HEAD+i*ROW;
+    ctx.fillStyle=i<3?"#fff6d6":(i%2?"#f4f7f2":"#fff"); ctx.fillRect(PAD,y,tw,ROW);
+    const cells=[["🥇","🥈","🥉"][i]||String(i+1), s.name, String(s.games), String(s.wins), s.best?String(s.best):"", s.mvp?String(s.mvp):""];
+    cells.forEach((v,j)=>{ const c=cols[j]; ctx.fillStyle="#14201a";
+      if(j===1){ ctx.textAlign="right"; fitText(ctx,v,c.w-24,32,i<3?800:600); ctx.fillText(v,c.r-14,y+ROW/2+2); }
+      else { ctx.textAlign="center"; setFont(ctx,j===3?800:600,30); ctx.fillText(v,c.x,y+ROW/2+2); } });
+  });
+  ctx.restore();
+  ctx.textAlign="center"; ctx.fillStyle="#6b776f"; setFont(ctx,500,24);
+  ctx.fillText("ניצחונות = משחקים שהקבוצה שלך ניצחה · 👑 = הקבוצה הכי טובה בערב · ⭐ = MVP",W/2,H-76);
+  setFont(ctx,500,26); ctx.fillText("⚽ כדורגל שבועי",W/2,H-36);
+  return cv;
+}
+function statsText(){
+  const st=computeStats().slice(0,10);
+  return "🏆 טבלת העונה\n"+st.map((s,i)=>`${["🥇","🥈","🥉"][i]||(i+1)+"."} ${s.name} · ${s.wins} ניצחונות`+(s.mvp?` · ⭐${s.mvp}`:"")).join("\n")+`\n\nהטבלה המלאה: ${pageUrl()}#stats`;
+}
 function imgSpec(kind){
+  if(kind==="stats"){ const rows=computeStats(); return rows.length?{title:"stats", rows, build:()=>buildStatsCanvas(rows), file:"טבלה"}:null; }
   const T=S.teams; if(!T) return null;
   if(kind==="final") return {title:"⚽ הכוחות להשבוע", sections:[{opt:T.options[T.chosen??0]}]};
   if(kind==="vote") return {title:"🗳️ הצבעה על הכוחות", sections:T.options.map((o,i)=>({label:OPT_NAMES[i],opt:o}))};
   const i=+kind.slice(3); return {title:`⚽ ${OPT_NAMES[i]}`, sections:[{opt:T.options[i]}]};
 }
-function imgKey(kind,spec){ return kind+"|"+JSON.stringify(spec.sections)+"|"+colorSlots(8).join(",")+"|"+gameLine(); }
+function imgKey(kind,spec){ return spec.rows ? kind+"|"+JSON.stringify(spec.rows) : kind+"|"+JSON.stringify(spec.sections)+"|"+colorSlots(8).join(",")+"|"+gameLine(); }
 function prepareImg(key,spec){
   if(readyImgs.has(key)||pendingImgs.has(key)) return;
   pendingImgs.add(key);
   (async()=>{
     await ensureFonts();
-    const cv=buildCanvas(spec.title,spec.sections);
+    const cv=spec.build ? spec.build() : buildCanvas(spec.title,spec.sections);
     const blob=await new Promise(r=>cv.toBlob(r,"image/png"));
-    readyImgs.set(key,{file:new File([blob],"teams.png",{type:"image/png"}), url:URL.createObjectURL(blob)});
+    readyImgs.set(key,{file:new File([blob],spec.rows?"table.png":"teams.png",{type:"image/png"}), url:URL.createObjectURL(blob)});
     pendingImgs.delete(key); render();
   })().catch(e=>{ console.error(e); pendingImgs.delete(key); });
 }
@@ -2643,6 +2680,7 @@ function viewStats(){
       h("thead",null,h("tr",null,h("th",null,"#"),h("th",{class:"tn"},"שחקן"),h("th",null,"ערבים"),h("th",null,"ניצחונות"),h("th",null,"👑"),h("th",null,"⭐"))),
       h("tbody",null,st.map((s,i)=>h("tr",{class:i<3?"top":""},
         h("td",null,medal(i)),h("td",{class:"tn"+(S.mergeMode?" click":"")+(S.mergeFrom===s.name?" sel":""),onclick:S.mergeMode?()=>{ S.mergeFrom=S.mergeFrom===s.name?null:s.name; render(); }:null},S.mergeMode?`✏️ ${s.name}`:s.name),h("td",null,s.games),h("td",null,h("b",null,s.wins)),h("td",null,s.best),h("td",null,s.mvp||""))))),
+    h("div",{style:"margin-top:10px"},imageShare("stats", statsText())),
     S.isAdmin ? mergeBox(st) : null,
     S.isAdmin ? h("button",{class:"linkbtn",style:"margin-top:8px",onclick:()=>{ S.mergeMode=!S.mergeMode; S.mergeFrom=null; render(); }},S.mergeMode?"✔ סיימתי לערוך שמות":"✏️ איחוד ושינוי שמות (שחקן שמופיע פעמיים)") : null,
     S.mergeMode && !S.mergeFrom ? h("div",{class:"hint"},"לחץ על השם הלא נכון בטבלה (למשל ״אורן״), ואז בחר את השם הנכון (״אורן לוי״).") : null,
