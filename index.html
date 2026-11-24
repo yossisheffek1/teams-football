@@ -570,6 +570,7 @@ async function checkAdmin(user){
     if(S.isOwner){
       lsSet("ownerDevice","1");   // this device belongs to the main admin: show him the account switcher
       onSnapshot(query(collection(db,"pushLog"),orderBy("at","desc"),limit(25)), q=>{ S.pushLog=q.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>b.at-a.at); render(); }, e=>console.warn("pushLog",e));
+      onSnapshot(query(collection(db,"loginErrors"),orderBy("at","desc"),limit(40)), q=>{ S.loginErrors=q.docs.map(d=>d.data()).filter(x=>x.at>Date.now()-7*86400000).sort((a,b)=>b.at-a.at); render(); }, ()=>{});
       onSnapshot(collection(db,"tokens"), q=>{ S.tokens=q.docs.filter(d=>d.data().token).map(d=>({uid:d.id, name:d.data().name||"", at:d.data().at})); migrateNames(); render(); }, ()=>{});
       onSnapshot(surveyResRef, s=>{ S.surveyResults = s.exists()?s.data():null; render(); }, ()=>{});
       ratUnsub = onSnapshot(ratRef, s=>{ const d=s.exists()?s.data():{}; S.ratings=d.list||[];
@@ -1726,10 +1727,20 @@ function asSection(card, open){
   card.classList.remove("card"); d.append(sum, card);
   return d;
 }
+function loginErrorsCard(){
+  const L=(S.loginErrors||[]); if(!L.length) return null;
+  return h("div",{class:"card"},
+    h("h2",null,"⚠️ שגיאות התחברות",h("span",{class:"count"},String(L.length))),
+    h("div",{class:"hint"},"ניסיונות התחברות שנכשלו בימים האחרונים (4 ספרות אחרונות של הטלפון). שלח לי צילום של זה כדי שאבדוק."),
+    L.slice(0,30).map(x=>h("div",{class:"logp"},
+      h("span",{class:"pn",dir:"ltr",style:"text-align:left;font-size:12px"},`${x.code}${x.ph?" · …"+x.ph:""}`),
+      h("small",null,`${x.stage==="confirm"?"אישור קוד":"שליחת קוד"} · ${x.app==="icon"?"אייקון":"דפדפן"} · ${fmtTime(x.at)}`))));
+}
 function playersDevicesCard(){
   return h("div",{class:"card"},
     h("h2",null,"👥 שחקנים ומכשירים"),
     asSection(loginSettingsCard(), true),
+    S.isOwner ? asSection(loginErrorsCard(), false) : null,
     S.isOwner ? asSection(pushPeopleCard(), false) : null,
     S.isOwner ? asSection(pushLogCard(), false) : null);
 }
@@ -1857,6 +1868,12 @@ function recaptchaBox(){
   return recaptcha;
 }
 const LOGIN_ERR = {"auth/invalid-phone-number":"מספר הטלפון לא תקין","auth/too-many-requests":"יותר מדי ניסיונות. נסה שוב בעוד כמה דקות","auth/invalid-verification-code":"הקוד לא נכון","auth/code-expired":"הקוד פג תוקף, שלח קוד חדש","auth/operation-not-allowed":"התחברות בטלפון עוד לא הופעלה. דבר עם המארגן","auth/quota-exceeded":"נגמרה מכסת ההודעות להיום. נסה מחר","auth/missing-phone-number":"כתוב מספר טלפון"};
+function logLoginError(stage, e, ph){
+  try{
+    const code=String((e&&e.code)||"unknown").slice(0,80), msg=String((e&&e.message)||"").slice(0,300);
+    addDoc(collection(db,"loginErrors"),{stage, code, msg, ua:navigator.userAgent.slice(0,200), app:isStandalone()?"icon":"browser", ph:ph?String(ph).slice(-4):"", at:Date.now()}).catch(()=>{});
+  }catch(_){}
+}
 async function sendCode(){
   const ph=normPhone(S.draft.loginPh ?? lsGet("myPhone"));
   if(!ph){ toast("כתוב מספר טלפון תקין"); return; }
@@ -1872,8 +1889,8 @@ async function sendCode(){
     lsSet("myPhone",ph); S.login={step:"code", phone:ph}; render();
     setTimeout(()=>{ const el=document.getElementById("f_code"); if(el) el.focus(); },50);
   }catch(e){
-    console.warn("login",e); resetRecaptcha();
-    S.login={step:"phone", err:String((e&&(e.code||e.message))||"")}; toast(LOGIN_ERR[e&&e.code]||"לא הצלחתי לשלוח קוד. נסה שוב"); render();
+    console.warn("login",e); resetRecaptcha(); logLoginError("send", e, ph);
+    S.login={step:"phone", err:String((e&&(e.code||e.message))||"")}; toast(LOGIN_ERR[e&&e.code]||`לא הצלחתי לשלוח קוד (${String(e&&e.code||"").replace("auth/","")}). נסה שוב`); render();
   }
 }
 async function sendCodeSignIn(){
@@ -1904,7 +1921,7 @@ async function confirmCode(){
     const name = await identifyMe();
     if(name){ toast(`✔ מחובר. שלום ${name}!`); setTimeout(()=>location.reload(),900); }
     else { S.login={step:"name"}; render(); }
-  }catch(e){ console.warn("confirm",e); S.login={...S.login, busy:false}; toast(LOGIN_ERR[e&&e.code]||"האימות נכשל, נסה שוב"); render(); }
+  }catch(e){ console.warn("confirm",e); logLoginError("confirm", e, S.login&&S.login.phone); S.login={...S.login, busy:false}; toast(LOGIN_ERR[e&&e.code]||"האימות נכשל, נסה שוב"); render(); }
 }
 // the server finds the player's name by his phone (organizer's contacts / earlier sign-ups)
 async function identifyMe(){

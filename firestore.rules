@@ -173,6 +173,16 @@ service cloud.firestore {
       // an organizer may correct a player's name (not his phone)
       allow update: if isAdmin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name']) && validName(request.resource.data);
     }
+    // failed phone logins (code, device type, last 4 digits) so the owner can see why
+    match /loginErrors/{id} {
+      allow read, delete: if isOwner();
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasOnly(['stage', 'code', 'msg', 'ua', 'app', 'ph', 'at'])
+        && request.resource.data.code is string && request.resource.data.code.size() <= 80
+        && request.resource.data.msg is string && request.resource.data.msg.size() <= 300
+        && request.resource.data.ua is string && request.resource.data.ua.size() <= 200
+        && request.resource.data.ph is string && request.resource.data.ph.size() <= 4;
+    }
     // notification delivery log: written by the server, only the owner reads it
     match /pushLog/{id} {
       allow read: if isOwner();
