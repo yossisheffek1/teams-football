@@ -1867,7 +1867,7 @@ function recaptchaBox(){
   if(!recaptcha) recaptcha=new RecaptchaVerifier(auth, freshCaptchaEl("recap"+Date.now()), {size:"invisible"});
   return recaptcha;
 }
-const LOGIN_ERR = {"auth/invalid-phone-number":"מספר הטלפון לא תקין","auth/too-many-requests":"יותר מדי ניסיונות. נסה שוב בעוד כמה דקות","auth/invalid-verification-code":"הקוד לא נכון","auth/code-expired":"הקוד פג תוקף, שלח קוד חדש","auth/operation-not-allowed":"התחברות בטלפון עוד לא הופעלה. דבר עם המארגן","auth/quota-exceeded":"נגמרה מכסת ההודעות להיום. נסה מחר","auth/missing-phone-number":"כתוב מספר טלפון"};
+const LOGIN_ERR = {"auth/error-code:-39":"גוגל חסמה זמנית את המספר הזה אחרי כמה ניסיונות. נסה שוב בעוד כמה שעות (ניסיון אחד בלבד)","auth/invalid-phone-number":"מספר הטלפון לא תקין","auth/too-many-requests":"יותר מדי ניסיונות. נסה שוב בעוד כמה דקות","auth/invalid-verification-code":"הקוד לא נכון","auth/code-expired":"הקוד פג תוקף, שלח קוד חדש","auth/operation-not-allowed":"התחברות בטלפון עוד לא הופעלה. דבר עם המארגן","auth/quota-exceeded":"נגמרה מכסת ההודעות להיום. נסה מחר","auth/missing-phone-number":"כתוב מספר טלפון"};
 function logLoginError(stage, e, ph){
   try{
     const code=String((e&&e.code)||"unknown").slice(0,80), msg=String((e&&e.message)||"").slice(0,300);
