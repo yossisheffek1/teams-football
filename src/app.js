@@ -1,0 +1,2734 @@
+// ====== הגדרות Firebase ======
+const firebaseConfig = {
+  apiKey: "AIzaSyD_FM3NMjHcRcTnz2WIEgvBVkc8tdMiXu4",
+  authDomain: "teams-football.firebaseapp.com",
+  projectId: "teams-football",
+  storageBucket: "teams-football.firebasestorage.app",
+  messagingSenderId: "175983615125",
+  appId: "1:175983615125:web:60a493fe62943970fbcf9c"
+};
+// =============================
+
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut, RecaptchaVerifier, linkWithPhoneNumber, signInWithPhoneNumber, PhoneAuthProvider, signInWithCredential } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-functions.js";
+import { getMessaging, getToken, onMessage, isSupported } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging.js";
+import { getFirestore, doc, collection, onSnapshot, setDoc, addDoc, deleteDoc, getDoc, updateDoc, serverTimestamp, query, orderBy, limit, writeBatch, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+// Web Push key from Firebase → Project settings → Cloud Messaging → Web Push certificates
+const VAPID_KEY = "BNFSlqmhear_HYeATMw44vdejYX5RTfxeVCk7DfbQvQqi3ccgjsMd4R2AvQrMT5ZqE_JeNSWzQgNpjLt8nmosnE";
+const RATING_MAX = 7, DEF_RATING = 4, WEEK = 7*24*3600*1000;
+const COLORS = [
+  {n:"כתומים", c:"#f97316", e:"🟠"}, {n:"כחולים", c:"#2563eb", e:"🔵"}, {n:"צהובים", c:"#facc15", e:"🟡"},
+  {n:"ירוקים", c:"#16a34a", e:"🟢"}, {n:"אדומים", c:"#dc2626", e:"🔴"}, {n:"שחורים", c:"#1f2937", e:"⚫"},
+  {n:"לבנים", c:"#ffffff", e:"⚪"}, {n:"סגולים", c:"#7c3aed", e:"🟣"}, {n:"ורודים", c:"#ec4899", e:"🩷"},
+  {n:"חומים", c:"#92400e", e:"🟤"}
+];
+const DEF_CFG = {capacity:18, numTeams:3, open:true, colors:[0,1,2,3,4,5,6,7], openAt:null, game:{day:"",time:"",place:""}, price:0, payLink:"", gameAt:null, lockHours:0, allowGuests:true, pushMode:"all", priority:[], prioHours:0, prioOpen:false, requireLogin:false};
+const OPT_NAMES = ["אופציה א׳","אופציה ב׳"];
+const S = {
+  cfg:{...DEF_CFG}, cfgLoaded:false, signups:[], signupsLoaded:false, ratings:[], apart:[], teams:null, votes:[], pay:{}, payMarks:{}, history:[], weeks:[], mvpVotes:[], lates:[], phones:{}, pushState:"unknown",
+  uid:null, isAdmin:false, isOwner:false, admins:{owner:"",emails:[]}, loading:true, error:null,
+  tab: location.hash==="#teams" ? "teams" : location.hash==="#stats" ? "stats" : "list",
+  showPaste:false, confirmReset:false, confirmCancel:false, copyText:null, busy:false,
+  subSel:new Set(), showColors:false, showImg:null, showText:null,
+  draft:{}, resDraft:null, resFor:null, promoted:[], showPayRemind:false, showGuest:false, confirmGuest:false, editHist:null, histDraft:null, editPhone:null, colorPick:null, swapSel:null, myToken:null, adminPushOk:false, lastWin:null, winBusy:false, playersView:"rate", prioBanner:null, payForm:false, confirmPayCancel:false, busyTeams:false, pushTest:{uids:[],names:[]}, testing:false, showContacts:false, phoneNames:{}, setOpen:null, prioEdit:false, survey:null, surveyResults:null, myVote:null, voteDraft:null, surveyOpenUI:false, surveySel:null, login:{step:"phone"}, authPhone:null, loginLater:false, confirmDel:null, confirmResetHist:false
+};
+try{ S.promoted = JSON.parse(localStorage.getItem("promoted")||"[]"); }catch(e){}
+let dismissedSug=new Set(); try{ dismissedSug=new Set(JSON.parse(localStorage.getItem("dismissedSug")||"[]")); }catch(e){}
+
+// ---------- utils ----------
+const $ = id => document.getElementById(id);
+function h(tag, attrs, ...kids){
+  const e = document.createElement(tag);
+  if(attrs) for(const k in attrs){
+    const v = attrs[k];
+    if(v==null || v===false) continue;
+    if(k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else if(k==="class") e.className = v;
+    else if(k==="style") e.style.cssText = v;
+    else if(k==="value") e.value = v;
+    else e.setAttribute(k, v===true ? "" : v);
+  }
+  for(const k of kids.flat()){ if(k==null||k===false) continue; e.append(k.nodeType ? k : document.createTextNode(String(k))); }
+  return e;
+}
+const norm = s => String(s||"").trim().replace(/\s+/g," ").toLowerCase();
+const clean = s => String(s||"").trim().replace(/\s+/g," ").slice(0,40);
+function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; }
+let toastT;
+function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove("show"),3000); }
+const DAYS=["ראשון","שני","שלישי","רביעי","חמישי","שישי","שבת"];
+function fmtTime(ms){
+  if(!ms) return "עכשיו";
+  const d=new Date(ms);
+  return "יום "+["א׳","ב׳","ג׳","ד׳","ה׳","ו׳","ש׳"][d.getDay()]+" "+String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");
+}
+function fmtFull(ms){ const d=new Date(ms); return `יום ${DAYS[d.getDay()]} ${d.getDate()}.${d.getMonth()+1} ב-${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; }
+function fmtDate(ms){ const d=new Date(ms); return `${d.getDate()}.${d.getMonth()+1}`; }
+function fmtLeft(ms){
+  const s=Math.max(0,Math.floor(ms/1000)), d=Math.floor(s/86400), hh=Math.floor(s%86400/3600), mm=Math.floor(s%3600/60), ss=s%60;
+  if(d) return `${d} ימים ו-${hh} שעות`;
+  if(hh) return `${hh}:${String(mm).padStart(2,"0")}:${String(ss).padStart(2,"0")}`;
+  return `${mm}:${String(ss).padStart(2,"0")}`;
+}
+function normPhone(p){
+  let d=String(p||"").replace(/[^\d+]/g,"");
+  if(d.startsWith("+")) d=d.slice(1);
+  if(d.startsWith("00")) d=d.slice(2);
+  if(d.startsWith("0")) d="972"+d.slice(1);
+  return /^\d{9,15}$/.test(d) ? d : "";
+}
+const prettyPhone = p => p && p.startsWith("972") ? "0"+p.slice(3) : (p||"");
+const rosterOf = name => S.ratings.find(x=>norm(x.n)===norm(name));
+function ratingOf(name){ const r=rosterOf(name); return r ? r.r : DEF_RATING; }
+const isGK = name => !!(rosterOf(name)||{}).gk;
+function colorSlots(k){
+  const src = Array.isArray(S.cfg.colors) ? S.cfg.colors : [];
+  const out=[], used=new Set();
+  for(let i=0;i<k;i++){ const c=src[i]; if(Number.isInteger(c) && c>=0 && c<COLORS.length && !used.has(c)){ out.push(c); used.add(c); } else out.push(null); }
+  for(let i=0;i<k;i++) if(out[i]==null){ let c=0; while(used.has(c)) c++; out[i]=c%COLORS.length; used.add(c); }
+  return out;
+}
+// colors of one option's teams: chosen per option by the organizer, else the default colors
+function optColorSlots(opt){
+  const k=(opt&&opt.teams||[]).length, base=colorSlots(Math.max(k,S.cfg.numTeams)).slice(0,k);
+  const src=Array.isArray(opt&&opt.colors)?opt.colors:[];
+  const out=[], used=new Set();
+  for(let i=0;i<k;i++){ const c=src[i]; if(Number.isInteger(c)&&c>=0&&c<COLORS.length&&!used.has(c)){ out.push(c); used.add(c); } else out.push(null); }
+  for(let i=0;i<k;i++) if(out[i]==null){ let c=base[i]; if(used.has(c)){ c=0; while(used.has(c)) c++; } out[i]=c; used.add(c); }
+  return out;
+}
+const optColor = (opt,i) => COLORS[optColorSlots(opt)[i]];
+const lsGet = k => { try{ return localStorage.getItem(k)||""; }catch(e){ return ""; } };
+const lsSet = (k,v) => { try{ localStorage.setItem(k,v); }catch(e){} };
+const isOpen = () => !!S.cfg.open || (!!S.cfg.openAt && Date.now()>=S.cfg.openAt);
+// priority ("regulars first") window
+const prioAt = () => S.cfg.openAt && (S.cfg.prioHours||0)>0 ? S.cfg.openAt - S.cfg.prioHours*3600000 : null;
+const isPrioOpen = () => !isOpen() && (!!S.cfg.prioOpen || (!!prioAt() && Date.now()>=prioAt()));
+const isPrio = name => (S.cfg.priority||[]).includes(norm(name));
+const game = () => {
+  const g={day:"",time:"",place:"",...(S.cfg.game||{})};
+  if(S.cfg.gameAt){ const d=new Date(S.cfg.gameAt); g.day=`יום ${DAYS[d.getDay()]} ${d.getDate()}.${d.getMonth()+1}`; g.time=`${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; }
+  return g;
+};
+function gameLine(){ const g=game(); return [g.day && `📅 ${g.day}`, g.time && `⏰ ${g.time}`, g.place && `📍 ${g.place}`].filter(Boolean).join(" · "); }
+const cancelLocked = () => { const c=S.cfg, now=Date.now(); return !!c.gameAt && (c.lockHours||0)>0 && now>=c.gameAt-c.lockHours*3600000 && now<c.gameAt+6*3600000; };
+async function run(fn, okMsg){
+  try{ await fn(); if(okMsg) toast(okMsg); return true; }
+  catch(e){
+    console.error(e);
+    if(e && e.code==="permission-denied") toast(S.isAdmin ? "אין הרשאה, בדוק את חוקי האבטחה ב-Firebase" : "הפעולה לא אפשרית כרגע");
+    else toast("משהו השתבש, נסה שוב");
+    return false;
+  }
+}
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const prevPayRef = doc(db,"payments","prev"), mvpRef = doc(db,"mvp","current");
+const cfgRef = doc(db,"config","main"), teamsRef = doc(db,"teams","current"), ratRef = doc(db,"ratings","main"), paidRef = doc(db,"payments","current");
+const surveyRef = doc(db,"survey","current"), surveyResRef = doc(db,"survey","results");
+const ownerRef = doc(db,"owner","admins"), apartRef = doc(db,"admin","apart");
+const fns = getFunctions(app, "europe-west1");
+const signCol = collection(db,"signups"), votesCol = collection(db,"votes"), histCol = collection(db,"history"), mvpCol = collection(db,"mvpVotes"), latesRef = doc(db,"lates","main");
+
+// ---------- data ----------
+let ratUnsub = null;
+function normTeams(d){
+  if(!d) return null;
+  if(Array.isArray(d.options) && d.options.length) return {at:d.at||0, options:d.options, status:d.status||"draft", chosen:d.chosen??null, mvp:d.mvp||null};
+  if(Array.isArray(d.teams) && d.teams.length)
+    return {at:d.at||0, options:[{teams:d.teams.map(t=>({players:t.players||[], subs:t.subs||[]}))}], status:"final", chosen:0};
+  return null;
+}
+function subscribe(){
+  onSnapshot(cfgRef, s=>{ S.cfg = s.exists() ? {...DEF_CFG, ...s.data()} : {...DEF_CFG}; S.cfgLoaded=true; detectPromotions(); armOpenTimer(); render(); }, e=>fail(e));
+  onSnapshot(teamsRef, s=>{ S.teams = normTeams(s.exists()?s.data():null); render(); }, e=>fail(e));
+  onSnapshot(query(signCol, orderBy("ts")), q=>{
+    S.signups = q.docs.map(d=>{ const x=d.data({serverTimestamps:"estimate"}); return {id:d.id, name:x.name, uid:x.uid, guestOf:x.guestOf||null, ts:x.ts?x.ts.toMillis():Date.now(), tsRaw:x.ts}; })
+      .sort((a,b)=>a.ts-b.ts);
+    const ids=new Set(S.signups.map(s=>s.id)); [...S.subSel].forEach(id=>{ if(!ids.has(id)) S.subSel.delete(id); });
+    S.signupsLoaded=true; S.loading=false; S.error=null; detectPromotions(); render();
+  }, e=>fail(e));
+  onSnapshot(votesCol, q=>{ S.votes=q.docs.map(d=>({id:d.id, ...d.data()})); render(); }, e=>console.warn("votes",e));
+  onSnapshot(paidRef, s=>{ const d=s.exists()?s.data():{}; S.pay=d; migrateOldPaid(d); render(); }, e=>console.warn("paid",e));
+  onSnapshot(mvpRef, s=>{ S.mvp=s.exists()?s.data():null; render(); }, e=>console.warn("mvp doc",e));
+  onSnapshot(prevPayRef, s=>{ S.prevPay=s.exists()?s.data():null; render(); }, e=>console.warn("prevPay",e));
+  onSnapshot(collection(db,"prevMarks"), q=>{ const m={}; q.docs.forEach(d=>{ m[d.id]=d.data(); }); S.prevMarks=m; render(); }, e=>console.warn("prevMarks",e));
+  onSnapshot(collection(db,"payMarks"), q=>{ const m={}; q.docs.forEach(d=>{ m[d.id]=d.data(); }); S.payMarks=m; render(); }, e=>console.warn("payMarks",e));
+  onSnapshot(surveyRef, s=>{ S.survey = s.exists()?s.data():null; render(); }, e=>console.warn("survey",e));
+  onSnapshot(histCol, q=>{ S.history=q.docs.map(d=>({id:d.id, ...d.data()})).sort((a,b)=>(a.at||0)-(b.at||0)); render(); }, e=>console.warn("history",e));
+}
+function fail(e){ console.error(e); S.loading=false; S.error="לא הצלחתי לטעון את הנתונים. בדוק חיבור לאינטרנט."; render(); }
+
+let ownerUnsub=null;
+function migrateApart(){
+  if(!S.isOwner || !S.apartLoaded || S.apartExists || !(S.oldApart||[]).length) return;
+  S.apartExists=true; S.apart=S.oldApart.slice(); setDoc(apartRef,{list:S.apart}).catch(()=>{});
+}
+async function checkAdmin(user){
+  if(ratUnsub){ ratUnsub(); ratUnsub=null; }
+  if(ownerUnsub){ ownerUnsub(); ownerUnsub=null; }
+  S.isAdmin=false; S.isOwner=false; S.ratings=[]; S.apart=[]; S.apartLoaded=false; S.apartExists=false;
+  if(!user || user.isAnonymous){ render(); return; }
+  try{ await getDoc(doc(db,"admin","check")); S.isAdmin=true; }
+  catch(e){ S.isAdmin=false; toast("החשבון הזה לא מוגדר כמארגן"); }
+  if(S.isAdmin){
+    // only the owner may read ratings; a successful read tells us this is the owner
+    try{ await getDoc(ratRef); S.isOwner=true; }catch(e){ S.isOwner=false; }
+    if(S.isOwner){
+      lsSet("ownerDevice","1");   // this device belongs to the main admin: show him the account switcher
+      onSnapshot(query(collection(db,"pushLog"),orderBy("at","desc"),limit(25)), q=>{ S.pushLog=q.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>b.at-a.at); render(); }, e=>console.warn("pushLog",e));
+      onSnapshot(query(collection(db,"loginErrors"),orderBy("at","desc"),limit(40)), q=>{ S.loginErrors=q.docs.map(d=>d.data()).filter(x=>x.at>Date.now()-7*86400000).sort((a,b)=>b.at-a.at); render(); }, ()=>{});
+      onSnapshot(collection(db,"tokens"), q=>{ S.tokens=q.docs.filter(d=>d.data().token).map(d=>({uid:d.id, name:d.data().name||"", at:d.data().at})); migrateNames(); render(); }, ()=>{});
+      onSnapshot(surveyResRef, s=>{ S.surveyResults = s.exists()?s.data():null; render(); }, ()=>{});
+      ratUnsub = onSnapshot(ratRef, s=>{ const d=s.exists()?s.data():{}; S.ratings=d.list||[];
+        // one-time move of "not together" pairs to the organizers' shared doc
+        S.oldApart = Array.isArray(d.apart) ? d.apart : []; migrateApart();
+        render(); }, ()=>{});
+      if(user.email && S.admins.owner!==user.email) setDoc(ownerRef,{owner:user.email},{merge:true}).catch(()=>{});
+    } else if(S.playersView==="rate") S.playersView="att";
+    onSnapshot(apartRef, s=>{ S.apartLoaded=true; S.apartExists=s.exists(); S.apart = s.exists() ? (s.data().list||[]) : []; migrateApart(); render(); }, ()=>{});
+    ownerUnsub = onSnapshot(ownerRef, s=>{ const d=s.exists()?s.data():{}; S.admins={owner:d.owner||"", emails:d.emails||[]}; render(); }, ()=>{});
+    registerAdminDevice();
+    onSnapshot(testRef, s=>{ S.pushTest = s.exists()?s.data():{uids:[],names:[]}; render(); }, ()=>{});
+    onSnapshot(collection(db,"who"), q=>{ const m={}; q.docs.forEach(d=>{ if(d.data().name) m[d.id]=d.data().name; }); S.whoMap=m; migrateNames(); render(); }, ()=>{});
+    // a listener stops for good after an error (e.g. while new rules are being published): try again
+    const listenPhones=(tries)=>onSnapshot(collection(db,"phones"), q=>{ const m={}, n={}; const v=new Set(); q.docs.forEach(d=>{ m[d.id]=d.data().phone; if(d.data().name) n[d.id]=d.data().name; if(d.data().v) v.add(d.id); }); S.phones=m; S.phoneNames=n; S.phoneV=v; S.phonesErr=null; migrateNames(); render(); },
+      e=>{ console.warn("phones",e); S.phonesErr=String(e&&e.code||e); render(); if(tries<5) setTimeout(()=>listenPhones(tries+1), 3000*(tries+1)); });
+    listenPhones(0);
+    onSnapshot(collection(db,"weeks"), q=>{ S.weeks=q.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(a.date||a.at)-(b.date||b.at)); render(); }, ()=>{});
+    onSnapshot(latesRef, s=>{ S.lates = s.exists() ? (s.data().list||[]) : []; render(); }, ()=>{});
+    try{ const c=await getDoc(cfgRef); if(!c.exists()) await setDoc(cfgRef, DEF_CFG); }catch(e){}
+  }
+  render();
+}
+onAuthStateChanged(auth, async user=>{
+  if(!user){ try{ await signInAnonymously(auth); }catch(e){ fail(e); } return; }
+  const first=!S.uid; S.uid = user.uid; S.authPhone = user.phoneNumber || null;
+  if(S.authPhone && !lsGet("myName")) identifyMe();
+  getDoc(doc(db,"who",user.uid)).then(d=>{ const n=d.exists()&&d.data().name; if(n && n!==lsGet("myName")){ lsSet("myName",n); render(); } }).catch(()=>{});
+  if(first){ initPush(); }
+  getDoc(doc(db,"surveyVotes",user.uid)).then(d=>{ S.myVote = d.exists()?d.data():null; render(); }).catch(()=>{});
+  await checkAdmin(user);
+  listenMvp();
+});
+// MVP votes: only the main organizer sees who voted for whom; others see their own vote,
+// and organizers see the server's tally (counts and who voted)
+let mvpUnsub=null, tallyUnsub=null;
+function listenMvp(){
+  if(mvpUnsub) mvpUnsub(); if(tallyUnsub){ tallyUnsub(); tallyUnsub=null; }
+  if(S.isOwner) mvpUnsub=onSnapshot(mvpCol, q=>{ S.mvpVotes=q.docs.map(d=>({id:d.id, ...d.data()})); render(); }, e=>console.warn("mvp",e));
+  else if(S.uid) mvpUnsub=onSnapshot(doc(db,"mvpVotes",S.uid), d=>{ S.mvpVotes=d.exists()?[{id:d.id,...d.data()}]:[]; render(); }, e=>console.warn("mvp",e));
+  if(S.isAdmin && !S.isOwner) tallyUnsub=onSnapshot(doc(db,"state","mvpTally"), d=>{ S.mvpTallyDoc=d.exists()?d.data():null; render(); }, e=>console.warn("tally",e));
+}
+subscribe();
+setTimeout(()=>{ if(S.loading){ S.loading=false; S.error="הטעינה לוקחת יותר מדי זמן. בדוק חיבור לאינטרנט."; render(); } }, 10000);
+
+// auto-open timer + countdown
+let openTimer=null, cdTimer=null;
+let prioTimer=null;
+function armOpenTimer(){
+  clearTimeout(openTimer); clearTimeout(prioTimer);
+  const pms = prioAt() ? prioAt()-Date.now() : -1;
+  if(pms>0 && pms<2**31-1) prioTimer=setTimeout(()=>{ render(); toast("🎟️ ההרשמה נפתחה לקבועים!"); }, pms+300);
+  const ms = S.cfg.openAt ? S.cfg.openAt-Date.now() : -1;
+  if(ms>0 && ms<2**31-1) openTimer=setTimeout(()=>{ render(); toast("🔓 ההרשמה נפתחה!"); }, ms+300);
+}
+function startCountdown(){
+  if(cdTimer) return;
+  cdTimer=setInterval(()=>{
+    const el=$("cd");
+    if(!el){ clearInterval(cdTimer); cdTimer=null; return; }
+    const left=Number(el.dataset.target||S.cfg.openAt||0)-Date.now();
+    if(left<=0){ clearInterval(cdTimer); cdTimer=null; render(); return; }
+    el.textContent=fmtLeft(left);
+  },1000);
+}
+
+// promotion detection (works across visits via localStorage)
+function detectPromotions(){
+  if(!S.cfgLoaded || !S.signupsLoaded) return;
+  const cap=S.cfg.capacity, active=S.signups.slice(0,cap), waiting=S.signups.slice(cap);
+  let prev=null; try{ prev=JSON.parse(localStorage.getItem("lastLists")||"null"); }catch(e){}
+  if(prev && Array.isArray(prev.waiting)){
+    let changed=false;
+    active.filter(s=>prev.waiting.includes(s.id)).forEach(s=>{
+      if(!S.promoted.some(p=>p.id===s.id)){ S.promoted.push({id:s.id,name:s.name}); changed=true; }
+      if(s.id===S.uid && s.uid===S.uid) toast("🎉 התפנה מקום, עלית מההמתנה! אתה משחק");
+    });
+    const ids=new Set(S.signups.map(s=>s.id));
+    const before=S.promoted.length; S.promoted=S.promoted.filter(p=>ids.has(p.id)); if(S.promoted.length!==before) changed=true;
+    if(changed) lsSet("promoted",JSON.stringify(S.promoted));
+  }
+  lsSet("lastLists", JSON.stringify({active:active.map(s=>s.id), waiting:waiting.map(s=>s.id)}));
+}
+function dismissPromo(id){ S.promoted=S.promoted.filter(p=>p.id!==id); lsSet("promoted",JSON.stringify(S.promoted)); render(); }
+
+// ---------- player actions ----------
+function mySignup(){ return S.signups.find(s=>s.uid && s.uid===S.uid && s.id===S.uid); }
+async function selfRegister(name){
+  name = clean(name);
+  if(!name){ toast("כתוב את השם שלך"); return; }
+  if(S.signups.some(s=>norm(s.name)===norm(name))){ toast("השם הזה כבר ברשימה"); return; }
+  if(!isOpen()){
+    if(!isPrioOpen()){ toast("ההרשמה עוד לא נפתחה"); return; }
+    if(!isPrio(name)){ toast(S.cfg.openAt?`כרגע רק לקבועים. ההרשמה לכולם תיפתח ${fmtFull(S.cfg.openAt)}`:"כרגע ההרשמה פתוחה רק לקבועים"); return; }
+  }
+  if(!S.uid){ toast("רגע, מתחבר…"); return; }
+  lsSet("myName", name); saveWho(name);
+  S.busy=true; render();
+  await run(()=>setDoc(doc(db,"signups",S.uid), {name, ts:serverTimestamp(), uid:S.uid}));
+  if(messaging && S.pushState==="on") refreshToken(false);
+  S.busy=false; render();
+  const me=mySignup();
+  if(me){ const i=S.signups.indexOf(me); toast(i<S.cfg.capacity ? `נרשמת! מקום ${i+1} ⚽` : `הרשימה מלאה, אתה מקום ${i-S.cfg.capacity+1} בהמתנה`); }
+}
+function myGuest(){ return S.signups.find(s=>s.id===S.uid+"_g" && s.uid===S.uid); }
+async function selfCancel(){
+  const me=mySignup(); if(!me) return;
+  if(cancelLocked()){ toast("כבר מאוחר מדי לבטל לבד. דבר עם המארגן"); return; }
+  const g=myGuest(), batch=writeBatch(db);
+  batch.delete(doc(db,"signups",me.id)); if(g) batch.delete(doc(db,"signups",g.id));
+  await run(()=>batch.commit(), g?"ההרשמה שלך ושל האורח בוטלה":"ההרשמה בוטלה");
+}
+async function addGuest(name){
+  name=clean(name);
+  if(!name){ toast("כתוב את שם האורח"); return; }
+  if(S.signups.some(s=>norm(s.name)===norm(name))){ toast("השם הזה כבר ברשימה"); return; }
+  if(!isOpen()){ toast("ההרשמה סגורה כרגע"); return; }
+  const ok=await run(()=>setDoc(doc(db,"signups",S.uid+"_g"),{name, ts:serverTimestamp(), uid:S.uid, guestOf:S.uid}));
+  if(ok){ S.showGuest=false; const g=myGuest(); if(g){ const i=S.signups.indexOf(g); toast(i<S.cfg.capacity?`${name} נוסף, מקום ${i+1}`:`${name} נוסף להמתנה (מקום ${i-S.cfg.capacity+1})`); } }
+  render();
+}
+async function cancelGuest(){
+  const g=myGuest(); if(!g) return;
+  if(cancelLocked()){ toast("כבר מאוחר מדי לבטל לבד. דבר עם המארגן"); return; }
+  await run(()=>deleteDoc(doc(db,"signups",g.id)), "האורח הוסר");
+}
+// MVP vote lives in mvp/current: open for 24 hours, independent of the weekly list
+const MVP_HOURS = 24;
+const mvpIsOpen = () => !!(S.mvp && S.mvp.open && Date.now() < (S.mvp.closeAt||0));
+const mvpWinners = () => (S.mvp && Array.isArray(S.mvp.winners)) ? S.mvp.winners : [];
+const joinNames = a => a.length<=1 ? (a[0]||"") : a.slice(0,-1).join(", ")+" ו"+a[a.length-1];
+const mvpRoundVotes = () => S.mvp ? S.mvpVotes.filter(v=>v.round===S.mvp.round && typeof v.name==="string") : [];
+const myMvpVote = () => { const v=mvpRoundVotes().find(v=>v.id===S.uid); return v?v.name:null; };
+async function voteMvp(name){
+  if(!mvpIsOpen()||!S.uid) return;
+  if(needLogin()) return loginNeededToast();
+  if(norm(name)===norm(lsGet("myName"))){ toast("אי אפשר להצביע לעצמך 🙂"); return; }
+  await run(()=>setDoc(doc(db,"mvpVotes",S.uid),{name, round:S.mvp.round}), `הצבעת ל${name} ⭐`);
+}
+// name behind a device id: own signup, saved phone/name, or notification name
+function nameOfUid(uid){
+  const su=S.signups.find(x=>x.uid===uid && x.id===uid); if(su) return su.name;
+  if((S.whoMap||{})[uid]) return S.whoMap[uid];
+  if((S.phoneNames||{})[uid]) return S.phoneNames[uid];   // older data, before names moved to "who"
+  const t=(S.tokens||[]).find(x=>x.uid===uid && x.name); if(t) return t.name;
+  return "";
+}
+function votersBox(votes, col){
+  // organizers can delete a vote (tap a name), e.g. a duplicate or an unknown device
+  const items=votes.map(v=>({v, n:nameOfUid(v.id)})).sort((a,b)=>(a.n||"תתת").localeCompare(b.n||"תתת","he"));
+  const ks=new Set(items.filter(x=>x.n).map(x=>norm(x.n)));
+  const not=S.signups.slice(0,S.cfg.capacity).filter(s=>!ks.has(norm(s.name))).map(s=>s.name);
+  let unk=0;
+  const del=async it=>{ if(!confirm(`למחוק את ההצבעה של ${it.n||"מכשיר לא ידוע"}?`)) return; await run(()=>deleteDoc(doc(db,col||"votes",it.v.id)),"🗑️ ההצבעה נמחקה"); };
+  return h("div",null,
+    h("div",{class:"sub-h"},`✔ הצביעו (${votes.length})`),
+    items.length ? h("div",{class:"chips"},items.map(it=>h("button",{class:"chip on",onclick:()=>del(it)},it.n||`❔ לא ידוע ${++unk}`))) : h("div",{class:"hint"},"עוד אף אחד"),
+    unk ? h("div",{class:"hint",style:"margin-top:4px"},"❔ לא ידוע = מכשיר שלא התחבר ולא נרשם ממנו. אם נראה לך כפול, לחץ עליו כדי למחוק.") : (items.length?h("div",{class:"hint",style:"margin-top:4px"},"לחיצה על שם מוחקת את ההצבעה שלו."):null),
+    not.length ? h("div",null,h("div",{class:"sub-h"},`⏳ ברשימה ועוד לא הצביעו (${not.length})`),h("div",{class:"chips"},not.map(n=>h("span",{class:"chip"},n)))) : null);
+}
+function roundVotes(){
+  if(!S.teams) return [];
+  const all=S.votes.filter(v=>v.round===S.teams.at && (v.choice===0||v.choice===1));
+  // one vote per person: the same player may have voted before logging in (another browser) and after.
+  // Keep the vote of his logged-in account; organizers see names, players fall back to their sign-ups.
+  const by=new Map(), V=S.phoneV||new Set();
+  for(const v of all){
+    const n=norm(nameOfUid(v.id)); const key=n||("#"+v.id);
+    const prev=by.get(key);
+    if(!prev || (V.has(v.id) && !V.has(prev.id)) || v.id===S.uid) by.set(key,v);
+  }
+  return [...by.values()];
+}
+function myVote(){ const v=S.teams && S.votes.find(v=>v.id===S.uid && v.round===S.teams.at && (v.choice===0||v.choice===1)); return v ? v.choice : null; }
+async function vote(choice){
+  if(!S.teams || S.teams.status!=="voting" || !S.uid) return;
+  if(needLogin()) return loginNeededToast();
+  await run(()=>setDoc(doc(db,"votes",S.uid), {choice, round:S.teams.at}), `הצבעת ל${OPT_NAMES[choice]} ✔`);
+}
+
+// ---------- admin actions ----------
+async function adminAdd(names){
+  const have = new Set(S.signups.map(s=>norm(s.name)));
+  const list=[], dup=[];
+  for(const raw of names){ const n=clean(raw); if(!n) continue; if(have.has(norm(n))){dup.push(n);continue;} have.add(norm(n)); list.push(n); }
+  for(const n of list) await run(()=>addDoc(signCol,{name:n, ts:serverTimestamp(), uid:"admin"}));
+  if(list.length===1) toast(`${list[0]} נוסף`); else if(list.length>1) toast(`נוספו ${list.length} שחקנים`);
+  if(dup.length) setTimeout(()=>toast(`כבר ברשימה: ${dup.join(", ")}`), list.length?1500:0);
+}
+function parsePaste(text){
+  return text.split(/\r?\n/).map(l=>l
+    .replace(/^\s*\[?\d{1,2}[:.]\d{2}.*?\]\s*/,"")
+    .replace(/^[\s\-–•*·>]*\d{0,3}\s*[.)\-–:]?\s*/,"")
+    .replace(/[\u{1F300}-\u{1FAFF}☀-➿]/gu,"").trim()
+  ).filter(l=>l && l.length<=40 && !/^(רשימה|כדורגל|המתנה|רשימת המתנה)[:\s]*$/.test(l));
+}
+async function adminRemove(s){
+  if(cancelLocked()) recordLate(s.name);
+  const idx=S.signups.findIndex(x=>x.id===s.id);
+  const promoted = idx<S.cfg.capacity && S.signups.length>S.cfg.capacity ? S.signups[S.cfg.capacity].name : null;
+  await run(()=>deleteDoc(doc(db,"signups",s.id)), promoted ? `${s.name} הוסר · ${promoted} עלה מההמתנה ⬆` : `${s.name} הוסר`);
+}
+async function adminMove(i,d){
+  const a=S.signups[i], b=S.signups[i+d]; if(!a||!b||!a.tsRaw||!b.tsRaw) return;
+  const batch=writeBatch(db);
+  batch.update(doc(db,"signups",a.id),{ts:b.tsRaw});
+  batch.update(doc(db,"signups",b.id),{ts:a.tsRaw});
+  await run(()=>batch.commit());
+}
+function recordLate(name){
+  S.lates=S.lates.concat([{n:name, at:Date.now()}]);
+  run(()=>setDoc(latesRef,{list:S.lates}), `${name} נרשם כביטול מאוחר ⏰`);
+}
+function addLateManual(name){
+  S.lates=S.lates.concat([{n:name, at:Date.now(), manual:true}]); render();
+  run(()=>setDoc(latesRef,{list:S.lates}), `${name} נרשם כביטול מאוחר ⏰`);
+}
+function removeLate(name){ S.lates=S.lates.filter(x=>norm(x.n)!==norm(name)); render(); run(()=>setDoc(latesRef,{list:S.lates})); }
+let cfgChain=Promise.resolve();
+function setCfg(p, msg){ const c={...S.cfg,...p}; S.cfg=c; armOpenTimer(); render(); cfgChain=cfgChain.then(()=>run(()=>setDoc(cfgRef,c), msg)); }
+function pickColor(slot, c){
+  const arr=colorSlots(Math.max(8, S.cfg.numTeams, slot+1));
+  const j=arr.indexOf(c);
+  if(j>=0 && j!==slot) arr[j]=arr[slot];
+  arr[slot]=c;
+  setCfg({colors:arr});
+}
+let ratTimer;
+function saveRoster(now){
+  clearTimeout(ratTimer);
+  const go=()=>run(()=>setDoc(ratRef,{list:S.ratings}));
+  if(now) go(); else ratTimer=setTimeout(go,500);
+}
+function setRating(name,r){
+  const cur=rosterOf(name);
+  S.ratings = S.ratings.filter(x=>norm(x.n)!==norm(name)).concat([{...(cur||{}), n:cur?cur.n:name, r, gk:cur?!!cur.gk:false, since:Date.now()}]); render(); saveRoster();
+}
+// keeper's value in the team split (his rating stays as is)
+function setKv(name, v){
+  const cur=rosterOf(name); if(!cur) return;
+  const e={...cur}; if(v==null) delete e.kv; else e.kv=Math.max(1,Math.min(RATING_MAX,Math.round(v*2)/2));
+  S.ratings=S.ratings.map(x=>norm(x.n)===norm(name)?e:x); render(); saveRoster();
+}
+function toggleGK(name){
+  const cur=rosterOf(name);
+  S.ratings = S.ratings.filter(x=>norm(x.n)!==norm(name)).concat([{...(cur||{n:name, r:DEF_RATING}), gk:!(cur&&cur.gk)}]); render(); saveRoster();
+}
+function setRosterPhone(name, raw){
+  const ph=normPhone(raw); if(raw && !ph){ toast("מספר לא תקין"); return; }
+  const cur=rosterOf(name);
+  S.ratings = S.ratings.filter(x=>norm(x.n)!==norm(name)).concat([{...(cur||{n:name, r:DEF_RATING}), phone:ph}]); render(); saveRoster(true);
+  toast(ph?"הטלפון נשמר":"הטלפון נמחק");
+}
+function phoneOf(signup){
+  if(!signup) return "";
+  if(signup.uid && signup.uid!=="admin" && S.phones[signup.uid]) return S.phones[signup.uid];
+  const r=rosterOf(signup.name); return (r&&r.phone)||"";
+}
+function removeFromRoster(name){ S.ratings=S.ratings.filter(x=>norm(x.n)!==norm(name)); render(); saveRoster(true); }
+function addApart(a,b){
+  if(!a||!b||norm(a)===norm(b)){ toast("בחר שני שחקנים שונים"); return; }
+  if(S.apart.some(p=>(norm(p.a)===norm(a)&&norm(p.b)===norm(b))||(norm(p.a)===norm(b)&&norm(p.b)===norm(a)))){ toast("הזוג הזה כבר קיים"); return; }
+  S.apart=S.apart.concat([{a,b}]); S.draft.apA=""; S.draft.apB=""; render(); run(()=>setDoc(apartRef,{list:S.apart}),"הזוג נשמר ✔");
+}
+function removeApart(i){ S.apart=S.apart.filter((_,j)=>j!==i); render(); run(()=>setDoc(apartRef,{list:S.apart})); }
+// ---------- payments ----------
+const PAY_ICON={bit:"💳",cash:"💵",admin:"✅",payer:"🏟️"};
+const PAY_TXT={bit:"שילם בביט",cash:"הביא מזומן",admin:"סומן ששילם",payer:"שילם על המגרש"};
+function payMark(id){ return S.payMarks[id] || null; }
+// payments made before "marks" existed kept an id list; turn it into marks once (organizer's device)
+function migrateOldPaid(d){
+  if(!S.isAdmin || !Array.isArray(d.paid) || !d.paid.length) return;
+  const batch=writeBatch(db);
+  d.paid.forEach(id=>{ if(!S.payMarks[id]) batch.set(doc(db,"payMarks",id),{m:"admin", by:S.uid||"", at:Date.now()}); });
+  batch.update(paidRef,{paid:[]});
+  batch.commit().catch(e=>console.warn("migrate paid",e));
+}
+const payActive = () => !!(S.pay && S.pay.payer);
+const payPrice = () => Number((S.pay&&S.pay.price) || S.cfg.price || 0);
+// the player who paid for the pitch: same device, or the same logged-in player on another device
+const iAmPayer = () => !!(S.pay && S.pay.payer && (S.pay.payer.uid===S.uid || (loggedIn() && lsGet("myName") && norm(S.pay.payer.name)===norm(lsGet("myName")))));
+function activeList(){ return S.signups.slice(0,S.cfg.capacity); }
+async function setMark(id, m){
+  const ref=doc(db,"payMarks",id);
+  if(!m){ const prev=S.payMarks[id]; const next={...S.payMarks}; delete next[id]; S.payMarks=next;
+    render(); return run(()=>deleteDoc(ref), prev?"הסימון בוטל":null); }
+  S.payMarks={...S.payMarks,[id]:{m,by:S.uid,at:Date.now()}}; render();
+  return run(()=>setDoc(ref,{m, by:S.uid||"", at:Date.now()}));
+}
+function togglePaid(id){ payMark(id) ? setMark(id,null) : setMark(id,"admin"); }
+async function startPayment(){
+  const me=mySignup();
+  if(!S.isAdmin && !(me && activeList().includes(me))){ toast("רק מי שברשימה יכול לעדכן תשלום"); return; }
+  const link=String(S.draft.payLink2 ?? S.cfg.payLink ?? "").trim().slice(0,200);
+  const price=Math.max(0, Math.round(Number(S.draft.payPrice ?? payPrice())||0));
+  if(!price){ toast("כתוב כמה כל אחד צריך להעביר"); return; }
+  const payer = me && activeList().includes(me) ? {uid:S.uid, name:me.name, id:me.id} : {uid:S.uid, name:"המארגן", id:""};
+  const data={...(S.pay||{}), payer, link, price, at:Date.now()};
+  delete S.draft.payLink2; delete S.draft.payPrice; S.payForm=false;
+  S.pay=data; render();
+  await run(()=>setDoc(paidRef,data), "💳 נשלחה בקשת תשלום לכל מי שברשימה");
+  if(payer.id && !payMark(payer.id)) setMark(payer.id,"payer");
+}
+async function cancelPayment(){
+  const batch=writeBatch(db);
+  Object.keys(S.payMarks).forEach(id=>batch.delete(doc(db,"payMarks",id)));
+  batch.set(paidRef,{paid:[]});
+  await run(()=>batch.commit(),"בקשת התשלום בוטלה");
+}
+async function remindUnpaid(){
+  await run(()=>updateDoc(paidRef,{remindAt:Date.now()}),"📣 נשלחה תזכורת למי שלא שילם");
+}
+async function newWeek(){
+  const batch=writeBatch(db);
+  const cap=S.cfg.capacity, played=S.signups.slice(0,cap);
+  let wkAt=0;
+  if(played.length){
+    const T=S.teams, opt=T&&T.status==="final"?T.options[T.chosen??0]:null;
+    const subs=opt?opt.teams.flatMap(t=>t.subs||[]):[];
+    const wk={at:Date.now(), date:S.cfg.gameAt&&S.cfg.gameAt<Date.now()+2*86400000?S.cfg.gameAt:Date.now(),
+      players:[...new Set(played.map(s=>s.name).concat(subs))], waiting:S.signups.slice(cap).filter(s=>!subs.includes(s.name)).map(s=>s.name)};
+    if(payActive()){
+      wk.pay={payer:S.pay.payer.name, price:payPrice(),
+        paid:played.filter(s=>payMark(s.id)).map(s=>({n:s.name, m:payMark(s.id).m})),
+        unpaid:played.filter(s=>!payMark(s.id)).map(s=>s.name)};
+    }
+    batch.set(doc(db,"weeks",String(wk.at)), wk); wkAt=wk.at;
+  }
+  S.signups.forEach(s=>batch.delete(doc(db,"signups",s.id)));
+  S.votes.forEach(v=>batch.delete(doc(db,"votes",v.id)));
+  batch.set(teamsRef,{options:[],at:0,status:"draft",chosen:null});
+  // last week's marks/request are replaced
+  Object.keys(S.prevMarks||{}).forEach(id=>batch.delete(doc(db,"prevMarks",id)));
+  if(payActive() && played.some(s=>!payMark(s.id) && !(S.pay.payer&&S.pay.payer.id===s.id))){
+    // players pay after the game: keep this week's payment open as "last week's payment"
+    const players={}; played.forEach(s=>{ players[s.id]={name:s.name, uid:s.uid||"", ...(s.guestOf?{guestOf:s.guestOf}:{})}; });
+    batch.set(prevPayRef,{payer:S.pay.payer, link:S.pay.link||"", price:payPrice(), at:S.pay.at||Date.now(), players, weekAt:wkAt});
+    Object.entries(S.payMarks).forEach(([id,mk])=>{ if(players[id]) batch.set(doc(db,"prevMarks",id),{m:mk.m, by:mk.by||"", at:mk.at||Date.now()}); });
+  } else if(S.prevPay) batch.delete(prevPayRef);
+  batch.set(paidRef,{paid:[]});
+  Object.keys(S.payMarks).forEach(id=>batch.delete(doc(db,"payMarks",id)));
+  let msg="התחלנו שבוע חדש ⚽";
+  const c={...S.cfg, prioOpen:false};
+  if(c.gameAt){ while(c.gameAt<=Date.now()) c.gameAt+=WEEK; }
+  if(c.openAt){
+    let t=c.openAt; while(t<=Date.now()) t+=WEEK;
+    c.open=false; c.openAt=t; msg=`שבוע חדש ⚽ ההרשמה תיפתח ${fmtFull(t)}`;
+  }
+  S.cfg=c; batch.set(cfgRef,c);
+  S.subSel.clear(); S.resDraft=null;
+  await run(()=>batch.commit(), msg);
+  armOpenTimer();
+}
+function saveDetails(){
+  const d=S.draft, g=game();
+  const raw={day:"",time:"",place:"",...(S.cfg.game||{})};
+  const ng={day:clean(d.gDay??raw.day), time:clean(d.gTime??raw.time), place:clean(d.gPlace??raw.place).slice(0,80)};
+  let gameAt=S.cfg.gameAt??null;
+  if(d.gameAt!==undefined){ gameAt = d.gameAt ? new Date(d.gameAt).getTime() : null; if(gameAt!=null && !(gameAt>0)) gameAt=null; }
+  const price=Math.max(0, Math.round(Number(d.price??S.cfg.price)||0));
+  const payLink=String(d.payLink??S.cfg.payLink??"").trim().slice(0,200);
+  ["gDay","gTime","gPlace","price","payLink","gameAt"].forEach(k=>delete S.draft[k]);
+  setCfg({game:ng, price, payLink, gameAt}, "הפרטים נשמרו ✔");
+}
+function setAutoOpen(){
+  const v=S.draft.openAt; if(!v){ toast("בחר תאריך ושעה"); return; }
+  const ms=new Date(v).getTime();
+  if(!(ms>Date.now())){ toast("בחר זמן עתידי"); return; }
+  delete S.draft.openAt;
+  setCfg({open:false, openAt:ms}, `ההרשמה תיפתח ${fmtFull(ms)}`);
+}
+
+// ---------- teams ----------
+function sizesFor(n,k){ const b=Math.floor(n/k), e=n%k; return Array.from({length:k},(_,i)=>b+(i<e?1:0)); }
+function balance(players,k,apart){
+  k=Math.max(1,Math.min(k,players.length));
+  const sizes=sizesFor(players.length,k);
+  const desc=(a,b)=>b.r-a.r;
+  const allGK=shuffle(players.filter(p=>p.gk)).sort(desc);
+  // a keeper counts in the split by his own "split value" (kv), not by his rating
+  const gks=allGK.slice(0,k).map(p=>p.kv!=null?{...p,r:p.kv}:p), rest=shuffle(players.filter(p=>!p.gk).concat(allGK.slice(k).map(p=>({...p,gk:false})))).sort(desc);
+  const teams=sizes.map(()=>[]);
+  shuffle([...Array(k).keys()]).slice(0,gks.length).forEach((t,i)=>teams[t].push(gks[i]));
+  let idx=0,fwd=true;
+  const step=()=>{ if(fwd){ if(idx===k-1) fwd=false; else idx++; } else { if(idx===0) fwd=true; else idx--; } };
+  for(const p of rest){ let g=0; while(teams[idx].length>=sizes[idx] && g++<k*3) step(); teams[idx].push(p); step(); }
+  const pairs=(apart||[]).map(x=>[norm(x.a),norm(x.b)]);
+  const sum=t=>t.reduce((a,p)=>a+p.r,0);
+  const avg=teams.reduce((a,t)=>a+sum(t),0)/players.length;
+  const cost=()=>{
+    let c=teams.reduce((a,t)=>a+(sum(t)-t.length*avg)**2,0);
+    if(pairs.length) for(const t of teams){ const ns=new Set(t.map(p=>norm(p.name))); for(const [a,b] of pairs) if(ns.has(a)&&ns.has(b)) c+=1000; }
+    return c;
+  };
+  let c=cost();
+  for(let it=0;it<5000&&k>1;it++){
+    const a=Math.floor(Math.random()*k); let b=Math.floor(Math.random()*(k-1)); if(b>=a) b++;
+    const i=Math.floor(Math.random()*teams[a].length), j=Math.floor(Math.random()*teams[b].length);
+    if(!!teams[a][i].gk !== !!teams[b][j].gk) continue;  // keep one keeper per team
+    [teams[a][i],teams[b][j]]=[teams[b][j],teams[a][i]];
+    const nc=cost(); if(nc<=c+1e-9) c=nc; else [teams[a][i],teams[b][j]]=[teams[b][j],teams[a][i]];
+  }
+  return shuffle(teams).map(t=>t.map(p=>p.name).sort((x,y)=>x.localeCompare(y,"he")));
+}
+function buildOption(main, subs, k){
+  const r=new Map(main.concat(subs).map(p=>[p.name,p.gk&&p.kv!=null?p.kv:p.r]));
+  const T=balance(main,k,S.apart).map(ps=>({players:ps, subs:[]}));
+  const sum=t=>t.players.concat(t.subs).reduce((a,n)=>a+(r.get(n)||DEF_RATING),0);
+  subs.slice().sort((a,b)=>b.r-a.r).forEach(p=>{
+    let best=0;
+    T.forEach((t,i)=>{ const b=T[best]; if(t.subs.length<b.subs.length || (t.subs.length===b.subs.length && sum(t)<sum(b))) best=i; });
+    T[best].subs.push(p.name);
+  });
+  return {teams:T, gks:main.concat(subs).filter(p=>p.gk).map(p=>p.name)};
+}
+const canon = opt => opt.teams.map(t=>t.players.slice().sort().join("|")).sort().join("||");
+const gkValue = name => { const r=rosterOf(name); return r && r.gk && typeof r.kv==="number" ? r.kv : null; };
+const player = s => ({name:s.name, r:ratingOf(s.name), gk:isGK(s.name), kv:gkValue(s.name)});
+function apartViolations(opt){
+  let v=0; for(const t of opt.teams){ const ns=new Set(t.players.map(norm)); for(const p of S.apart) if(ns.has(norm(p.a))&&ns.has(norm(p.b))) v++; } return v;
+}
+async function makeTeamsServer(){
+  S.busyTeams=true; render();
+  try{
+    const res=await httpsCallable(fns,"makeTeams")({subs:[...S.subSel]});
+    const d=res.data||{};
+    toast(d.bad ? "⚠️ לא הצלחתי להפריד את כל הזוגות של ״לא ביחד״" : d.options>1 ? "נוצרו 2 אופציות ⚽" : "נוצרה אופציה אחת");
+  }catch(e){ console.error(e); toast("החלוקה נכשלה, נסה שוב"); }
+  S.busyTeams=false; render();
+}
+function makeTeams(){
+  const cap=S.cfg.capacity, active=S.signups.slice(0,cap);
+  if(active.length<2){ toast("צריך לפחות 2 שחקנים ברשימה"); return; }
+  if(!S.isOwner) return makeTeamsServer();   // co-organizers don't see ratings: the server balances
+  const k=Math.min(S.cfg.numTeams,active.length);
+  const main=active.map(player);
+  const subs=S.signups.slice(cap).filter(s=>S.subSel.has(s.id)).map(player);
+  const a=buildOption(main,subs,k); let b=null;
+  for(let t=0;t<60 && !b;t++){ const c=buildOption(main,subs,k); if(canon(c)!==canon(a)) b=c; }
+  const t={at:Date.now(), options:b?[a,b]:[a], status:"draft", chosen:null};
+  S.teams=t; S.resDraft=null; render();
+  const bad=apartViolations(a)+(b?apartViolations(b):0);
+  run(()=>setDoc(teamsRef,t), bad ? "⚠️ לא הצלחתי להפריד את כל הזוגות של ״לא ביחד״" : (b?"נוצרו 2 אופציות ⚽":"נוצרה אופציה אחת (אין מספיק שחקנים לשתיים)"));
+}
+async function setStatus(status, chosen=null){
+  if(!S.teams) return;
+  S.teams={...S.teams, status, chosen}; render();
+  await run(()=>updateDoc(teamsRef,{status, chosen}),
+    status==="voting" ? "ההצבעה פתוחה 🗳️" : status==="final" ? `נבחרה ${OPT_NAMES[chosen]} ✔` : null);
+}
+function closeVoting(){
+  const v=roundVotes(), c0=v.filter(x=>x.choice===0).length, c1=v.filter(x=>x.choice===1).length;
+  if(c0===c1){ toast(c0? "תיקו! בחר ידנית את האופציה" : "אין עדיין הצבעות"); return; }
+  setStatus("final", c0>c1?0:1);
+}
+function optionStrength(opt){
+  const avgs=opt.teams.map(t=>t.players.reduce((a,n)=>a+ratingOf(n),0)/Math.max(1,t.players.length));
+  return {avgs, gap:Math.max(...avgs)-Math.min(...avgs)};
+}
+const gkSet = opt => new Set((opt.gks||[]).map(norm));
+
+// ---------- results & stats ----------
+function saveResults(){
+  const T=S.teams; if(!T||T.status!=="final") return;
+  const opt=T.options[T.chosen??0], slots=optColorSlots(opt);
+  const wins=S.resDraft||opt.teams.map(()=>0);
+  const rec={at:T.at, date:Date.now(), teams:opt.teams.map((t,i)=>({players:t.players, subs:t.subs||[], wins:wins[i]||0, color:slots[i]}))};
+  run(()=>setDoc(doc(db,"history",String(T.at)), rec, {merge:true}), "התוצאות נשמרו 🏆");
+}
+async function openMvp(opt){
+  const T=S.teams; if(!T || !opt) return;
+  const names=[...new Set(opt.teams.flatMap(t=>t.players.concat(t.subs||[])))];
+  const now=Date.now(), d={round:T.at, names, open:true, openedAt:now, closeAt:now+MVP_HOURS*3600000, winners:[]};
+  S.mvp=d; render();
+  await run(()=>setDoc(mvpRef,d),`הצבעת MVP נפתחה ל-${MVP_HOURS} שעות ⭐`);
+}
+async function finalizeMvp(winners){
+  const M=S.mvp; if(!M) return;
+  S.mvp={...M, open:false, winners}; render();
+  await run(()=>setDoc(mvpRef,{...M, open:false, winners}));
+  const val=winners.length>1?winners:(winners[0]||null);
+  await run(()=>setDoc(doc(db,"history",String(M.round)),{at:M.round, mvp:val},{merge:true}), winners.length?`⭐ ${joinNames(winners)} ${winners.length>1?"הם":"הוא"} ה-MVP!`:"ההצבעה נסגרה");
+}
+async function setMvp(name){ await finalizeMvp([name]); }
+function mvpTally(){
+  if(!S.isOwner){ const t=S.mvpTallyDoc; if(!t || !S.mvp || t.round!==S.mvp.round) return []; return Object.entries(t.counts||{}).sort((a,b)=>b[1]-a[1]); }
+  const m=new Map(); mvpRoundVotes().forEach(v=>m.set(v.name,(m.get(v.name)||0)+1)); return [...m.entries()].sort((a,b)=>b[1]-a[1]);
+}
+// who voted (ids): the owner from the votes, other organizers from the server's tally
+function mvpVoters(){
+  if(S.isOwner) return mvpRoundVotes();
+  const t=S.mvpTallyDoc; return t && S.mvp && t.round===S.mvp.round ? (t.voters||[]).map(id=>({id})) : [];
+}
+function closeMvp(){
+  const t=mvpTally(); if(!t.length){ toast("אין עדיין הצבעות"); return; }
+  const max=t[0][1];
+  finalizeMvp(t.filter(x=>x[1]===max).map(x=>x[0]));   // a tie: all the leaders are MVP
+}
+function deleteResult(id){ if(S.editHist===id) S.editHist=null; run(()=>deleteDoc(doc(db,"history",id)), "הערב נמחק מהטבלה"); }
+async function resetHistory(){
+  const batch=writeBatch(db); S.history.forEach(g=>batch.delete(doc(db,"history",g.id)));
+  S.editHist=null; await run(()=>batch.commit(), "הטבלה אופסה");
+}
+function startEditHist(g){ S.editHist=g.id; S.histDraft={wins:(g.teams||[]).map(t=>t.wins||0), mvp:g.mvp||""}; render(); }
+function saveHist(g){
+  const d=S.histDraft;
+  const rec={...g, teams:(g.teams||[]).map((t,i)=>({...t, wins:d.wins[i]||0})), mvp:d.mvp||null};
+  delete rec.id;
+  S.editHist=null;
+  run(()=>setDoc(doc(db,"history",g.id), rec), "הערב עודכן ✔");
+}
+function histEditor(g){
+  const d=S.histDraft, names=(g.teams||[]).flatMap(t=>(t.players||[]).concat(t.subs||[]));
+  return h("div",{class:"hedit"},
+    h("div",{class:"hedit-h"},`✏️ עריכת הערב של ${fmtDate(g.date||g.at)}`),
+    (g.teams||[]).map((t,i)=>{ const c=COLORS[(t.color??0)%COLORS.length]; return h("div",{class:"stepper"},
+      h("div",{class:"lbl"},h("b",null,h("span",{class:"dot",style:`background:${c.c};margin-inline-end:6px`}),c.n),h("small",null,(t.players||[]).join(", "))),
+      h("div",{class:"ctrl"},
+        h("button",{onclick:()=>{ if(d.wins[i]>0){ d.wins[i]--; render(); } }},"−"),
+        h("output",null,d.wins[i]),
+        h("button",{onclick:()=>{ d.wins[i]++; render(); }},"+"))); }),
+    h("label",{class:"field"},h("span",null,"⭐ MVP"),
+      h("select",{class:"sel",style:"width:100%",onchange:e=>{d.mvp=e.target.value==="__tie__"?g.mvp:e.target.value;}},
+        Array.isArray(g.mvp) ? (()=>{ const o=h("option",{value:"__tie__"},`תיקו: ${joinNames(g.mvp)}`); if(Array.isArray(d.mvp)) o.selected=true; return o; })() : null,
+        h("option",{value:""},"בלי MVP"),
+        [...new Set(names.concat(d.mvp&&!Array.isArray(d.mvp)?[d.mvp]:[]))].map(n=>{ const o=h("option",{value:n},n); if(d.mvp===n) o.selected=true; return o; }))),
+    h("div",{class:"share"},
+      h("button",{class:"btn ghost",onclick:()=>{S.editHist=null;render();}},"ביטול"),
+      h("button",{class:"btn",onclick:()=>saveHist(g)},"💾 שמור")));
+}
+function computeStats(){
+  const m=new Map();
+  for(const g of S.history){
+    const teams=g.teams||[]; const max=Math.max(0,...teams.map(t=>t.wins||0));
+    teams.forEach(t=>{
+      const best = max>0 && (t.wins||0)===max;
+      (t.players||[]).concat(t.subs||[]).forEach(n=>{
+        const k=norm(n); const s=m.get(k)||{name:n, games:0, wins:0, best:0, mvp:0};
+        s.name=n; s.games++; s.wins+=(t.wins||0); if(best) s.best++; m.set(k,s);
+      });
+    });
+  }
+  for(const g of S.history) for(const mv of (Array.isArray(g.mvp)?g.mvp:(g.mvp?[g.mvp]:[]))){ const k=norm(mv); const s=m.get(k)||{name:mv, games:0, wins:0, best:0, mvp:0}; s.mvp++; m.set(k,s); }
+  return [...m.values()].sort((a,b)=>b.wins-a.wins || b.best-a.best || b.mvp-a.mvp || (b.wins/Math.max(1,b.games))-(a.wins/Math.max(1,a.games)) || a.name.localeCompare(b.name,"he"));
+}
+
+function ratingSuggestions(){
+  const per=new Map();
+  for(const g of S.history){
+    const teams=g.teams||[], tot=teams.reduce((a,t)=>a+(t.wins||0),0), k=teams.length; if(!tot||k<2) continue;
+    teams.forEach(t=>{ const share=(t.wins||0)/tot*k;
+      (t.players||[]).forEach(n=>{ const r=rosterOf(n); if(r && r.since && (g.at||0)<r.since) return;
+        const key=norm(n), s=per.get(key)||{name:n,games:0,sum:0}; s.games++; s.sum+=share; per.set(key,s); }); });
+  }
+  const out=[];
+  for(const [key,s] of per){
+    if(s.games<3) continue;
+    const perf=s.sum/s.games, cur=ratingOf(s.name);
+    let to=null; if(perf>=1.35 && cur<RATING_MAX) to=cur+1; else if(perf<=0.65 && cur>1) to=cur-1;
+    if(to!=null && !dismissedSug.has(`${key}:${cur}>${to}`)) out.push({key,name:s.name,cur,to,perf,games:s.games});
+  }
+  return out.sort((a,b)=>Math.abs(b.perf-1)-Math.abs(a.perf-1));
+}
+function dismissSug(s){ dismissedSug.add(`${s.key}:${s.cur}>${s.to}`); lsSet("dismissedSug",JSON.stringify([...dismissedSug])); render(); }
+
+// ---------- share ----------
+const pageUrl = () => location.href.split("#")[0];
+function listText(){
+  const cap=S.cfg.capacity, a=S.signups.slice(0,cap), w=S.signups.slice(cap);
+  let t=`⚽ כדורגל השבוע (${a.length}/${cap})\n`;
+  if(gameLine()) t+=gameLine()+"\n";
+  t+="\n";
+  a.forEach((s,i)=>t+=`${i+1}. ${s.name}\n`);
+  if(a.length<cap) t+=`\nנשארו ${cap-a.length} מקומות\n`;
+  if(w.length){ t+=`\n⏳ רשימת המתנה:\n`; w.forEach((s,i)=>t+=`${i+1}. ${s.name}\n`); }
+  t+=`\nלהרשמה: ${pageUrl()}`;
+  return t.trim();
+}
+function inviteText(){
+  let t=`⚽ ההרשמה לכדורגל השבוע `+(isOpen()?"פתוחה!":S.cfg.openAt?`תיפתח ${fmtFull(S.cfg.openAt)}`:"תיפתח בקרוב")+"\n";
+  if(gameLine()) t+=gameLine()+"\n";
+  t+=`${S.cfg.capacity} מקומות, כל הקודם זוכה.\nנרשמים כאן: ${pageUrl()}`;
+  return t;
+}
+function mvpText(){ const w=mvpWinners(); return `⭐ ה-MVP של הערב: ${joinNames(w)}! 👏`; }
+function mvpCallText(){ return `⭐ מי היה ה-MVP של הערב? מצביעים כאן:\n${pageUrl()}#teams`; }
+function promoText(name){ return `${name}, התפנה מקום בכדורגל! אתה בפנים ⚽`+(gameLine()?`\n${gameLine()}`:"")+`\n${pageUrl()}`; }
+function payRemindText(){
+  const unpaid=activeList().filter(s=>!payMark(s.id));
+  const link=(S.pay&&S.pay.link)||S.cfg.payLink;
+  let t=`💳 תזכורת תשלום לכדורגל (${payPrice()}₪`+(S.pay&&S.pay.payer?` ל${S.pay.payer.name}`:"")+`)\n`;
+  t+=unpaid.map(s=>`• ${s.name}`).join("\n");
+  if(link) t+=`\n\nלתשלום: ${link}`;
+  return t+`\nאפשר לסמן ששילמתם באפליקציה: ${pageUrl()}\nתודה! 🙏`;
+}
+function optionLines(opt){
+  const gk=gkSet(opt);
+  const nm=n=>gk.has(norm(n))?`${n} 🧤`:n;
+  return opt.teams.map((tm,i)=>{ const c=optColor(opt,i); return `${c.e} ${c.n}: ${tm.players.map(nm).join(", ")}`+(tm.subs&&tm.subs.length?` (מחליפים: ${tm.subs.map(nm).join(", ")})`:""); }).join("\n");
+}
+function optionText(i){ return `⚽ ${OPT_NAMES[i]}\n\n${optionLines(S.teams.options[i])}`; }
+function voteText(){ return `🗳️ הצבעה על הכוחות להשבוע!\nאופציה א׳ או אופציה ב׳? מצביעים כאן:\n${pageUrl()}#teams`; }
+function finalText(){ const o=S.teams.options[S.teams.chosen??0]; return `⚽ הכוחות להשבוע\n\n${optionLines(o)}`; }
+const waHref = text => "https://wa.me/?text="+encodeURIComponent(text);
+async function copy(text){
+  try{ await navigator.clipboard.writeText(text); toast("הועתק, אפשר להדביק בוואטסאפ"); S.copyText=null; render(); }
+  catch(e){ S.copyText=text; render(); }
+}
+function shareRow(text){
+  return h("div",null,
+    h("div",{class:"share"},
+      h("button",{class:"btn ghost",onclick:()=>copy(text)},"📋 העתק"),
+      h("a",{class:"btn wa",href:waHref(text),target:"_blank",rel:"noopener"},"שלח בוואטסאפ")),
+    S.copyText===text ? h("textarea",{class:"copybox",readonly:true,onfocus:e=>e.target.select()},text) : null);
+}
+
+// ---------- team image (canvas) ----------
+const IMG = {W:1080, PAD:44, GAP:22, HEAD:84, ROW:62, TOP:176};
+const readyImgs = new Map(), pendingImgs = new Set();
+let fontsReady=null;
+function ensureFonts(){
+  return fontsReady ||= Promise.all(["900 58px Heebo","800 40px Heebo","600 32px Heebo","500 30px Heebo"].map(f=>document.fonts.load(f))).catch(()=>{});
+}
+function lum(hex){ const n=parseInt(hex.slice(1),16); return (0.299*((n>>16)&255)+0.587*((n>>8)&255)+0.114*(n&255))/255; }
+function setFont(ctx,w,s){ ctx.font=`${w} ${s}px Heebo, Arial, sans-serif`; }
+function fitText(ctx,text,maxW,size,weight){ let s=size; setFont(ctx,weight,s); while(ctx.measureText(text).width>maxW && s>16){ s-=2; setFont(ctx,weight,s); } }
+function rrect(ctx,x,y,w,h,r){ ctx.beginPath(); if(ctx.roundRect) ctx.roundRect(x,y,w,h,r); else ctx.rect(x,y,w,h); }
+function imgGroups(opt){ const k=opt.teams.length, per=k<=4?k:Math.ceil(k/2), g=[]; for(let i=0;i<k;i+=per) g.push(opt.teams.slice(i,i+per).map((t,j)=>({t,idx:i+j}))); return {per,groups:g}; }
+function groupH(g){ return IMG.HEAD + Math.max(1,...g.map(c=>c.t.players.length+(c.t.subs||[]).length))*IMG.ROW + 8; }
+function sectionH(sec){ const L=imgGroups(sec.opt); return (sec.label?74:0) + L.groups.reduce((a,g)=>a+groupH(g)+IMG.GAP,0); }
+function drawCol(ctx,t,idx,x,y,w,h,gk,c){
+  const light=lum(c.c)>0.62;
+  ctx.save(); rrect(ctx,x,y,w,h,22); ctx.fillStyle="#fff"; ctx.fill(); ctx.clip();
+  ctx.fillStyle=c.c; ctx.fillRect(x,y,w,IMG.HEAD);
+  if(c.c==="#ffffff"){ ctx.fillStyle="#e3e8e1"; ctx.fillRect(x,y+IMG.HEAD-3,w,3); }
+  ctx.fillStyle=light?"#14201a":"#fff"; ctx.textAlign="center";
+  fitText(ctx,c.n,w-20,42,800); ctx.fillText(c.n,x+w/2,y+IMG.HEAD/2+2);
+  let ry=y+IMG.HEAD;
+  const rows=t.players.map(p=>({p,sub:false})).concat((t.subs||[]).map(p=>({p,sub:true})));
+  rows.forEach((r,i)=>{
+    ctx.fillStyle=r.sub?"#fff3dc":(i%2?"#f4f7f2":"#fff"); ctx.fillRect(x,ry,w,IMG.ROW);
+    ctx.fillStyle=r.sub?"#7a5212":"#14201a";
+    const txt=(r.sub?"🔄 ":"")+r.p+(gk.has(norm(r.p))?" 🧤":"");
+    fitText(ctx,txt,w-24,32,r.sub?500:600); ctx.fillText(txt,x+w/2,ry+IMG.ROW/2+2);
+    ry+=IMG.ROW;
+  });
+  ctx.restore();
+  ctx.strokeStyle="#dfe5dc"; ctx.lineWidth=2; rrect(ctx,x+1,y+1,w-2,h-2,22); ctx.stroke();
+}
+function buildCanvas(title, sections){
+  const {W,PAD,GAP,TOP}=IMG;
+  const hasSubs=sections.some(s=>s.opt.teams.some(t=>(t.subs||[]).length));
+  const hasGK=sections.some(s=>(s.opt.gks||[]).length);
+  const legend=[hasSubs&&"🔄 = מחליף", hasGK&&"🧤 = שוער"].filter(Boolean).join("   ");
+  const H=TOP+sections.reduce((a,s)=>a+sectionH(s),0)+(legend?110:70);
+  const cv=document.createElement("canvas"); cv.width=W; cv.height=H;
+  const ctx=cv.getContext("2d"); ctx.direction="rtl"; ctx.textBaseline="middle";
+  ctx.fillStyle="#f2f4ef"; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle="#0e3b25"; ctx.fillRect(0,0,W,TOP-34);
+  ctx.textAlign="center"; ctx.fillStyle="#fff"; setFont(ctx,900,58); ctx.fillText(title,W/2,62);
+  const sub=gameLine() || new Date().toLocaleDateString("he-IL",{weekday:"long",day:"numeric",month:"numeric"});
+  ctx.fillStyle="rgba(255,255,255,.78)"; fitText(ctx,sub,W-80,30,500); ctx.fillText(sub,W/2,112);
+  let y=TOP;
+  for(const sec of sections){
+    if(sec.label){ ctx.textAlign="right"; ctx.fillStyle="#14201a"; setFont(ctx,800,46); ctx.fillText(sec.label,W-PAD,y+30); y+=74; }
+    const L=imgGroups(sec.opt), n=L.per, colW=(W-2*PAD-(n-1)*GAP)/n, gk=gkSet(sec.opt);
+    for(const g of L.groups){ const gh=groupH(g); g.forEach((c,j)=>drawCol(ctx,c.t,c.idx,W-PAD-(j+1)*colW-j*GAP,y,colW,gh,gk,optColor(sec.opt,c.idx))); y+=gh+GAP; }
+  }
+  ctx.textAlign="center"; ctx.fillStyle="#6b776f"; setFont(ctx,500,26);
+  if(legend) ctx.fillText(legend,W/2,H-80);
+  ctx.fillText("⚽ כדורגל שבועי",W/2,H-38);
+  return cv;
+}
+// the season table as an image
+function buildStatsCanvas(rows){
+  const W=1080, PAD=44, TOP=176, HEAD=70, ROW=64;
+  const H=TOP+HEAD+rows.length*ROW+110;
+  const cv=document.createElement("canvas"); cv.width=W; cv.height=H;
+  const ctx=cv.getContext("2d"); ctx.direction="rtl"; ctx.textBaseline="middle";
+  ctx.fillStyle="#f2f4ef"; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle="#0e3b25"; ctx.fillRect(0,0,W,TOP-34);
+  ctx.textAlign="center"; ctx.fillStyle="#fff"; setFont(ctx,900,58); ctx.fillText("🏆 טבלת העונה",W/2,62);
+  const sub=`${S.history.length} ערבים · ${new Date().toLocaleDateString("he-IL",{day:"numeric",month:"numeric",year:"numeric"})}`;
+  ctx.fillStyle="rgba(255,255,255,.78)"; setFont(ctx,500,30); ctx.fillText(sub,W/2,112);
+  // columns, right to left: # | name | games | wins | crown | mvp
+  const x0=W-PAD, cols=[{k:"#",w:80},{k:"שחקן",w:360},{k:"ערבים",w:110},{k:"ניצחונות",w:140},{k:"קבוצה מנצחת",w:200},{k:"⭐",w:102}];
+  let cx=x0; cols.forEach(c=>{ c.x=cx-c.w/2; c.r=cx; cx-=c.w; });
+  const top=TOP, tw=W-2*PAD;
+  ctx.save(); rrect(ctx,PAD,top,tw,HEAD+rows.length*ROW,22); ctx.fillStyle="#fff"; ctx.fill(); ctx.clip();
+  ctx.fillStyle="#14201a"; ctx.fillRect(PAD,top,tw,HEAD);
+  ctx.fillStyle="#fff"; cols.forEach(c=>{ setFont(ctx,800,c.k.length>8?26:30); ctx.textAlign=c.k==="שחקן"?"right":"center"; ctx.fillText(c.k,c.k==="שחקן"?c.r-14:c.x,top+HEAD/2+2); });
+  rows.forEach((s,i)=>{
+    const y=top+HEAD+i*ROW;
+    ctx.fillStyle=i<3?"#fff6d6":(i%2?"#f4f7f2":"#fff"); ctx.fillRect(PAD,y,tw,ROW);
+    const cells=[["🥇","🥈","🥉"][i]||String(i+1), s.name, String(s.games), String(s.wins), s.best?String(s.best):"", s.mvp?String(s.mvp):""];
+    cells.forEach((v,j)=>{ const c=cols[j]; ctx.fillStyle="#14201a";
+      if(j===1){ ctx.textAlign="right"; fitText(ctx,v,c.w-24,32,i<3?800:600); ctx.fillText(v,c.r-14,y+ROW/2+2); }
+      else { ctx.textAlign="center"; setFont(ctx,j===3?800:600,30); ctx.fillText(v,c.x,y+ROW/2+2); } });
+  });
+  ctx.restore();
+  ctx.textAlign="center"; ctx.fillStyle="#6b776f"; setFont(ctx,500,24);
+  ctx.fillText("קבוצה מנצחת = ערבים שהקבוצה שלך סיימה ראשונה · ⭐ = MVP",W/2,H-76);
+  setFont(ctx,500,26); ctx.fillText("⚽ כדורגל שבועי",W/2,H-36);
+  return cv;
+}
+function statsText(){
+  const st=computeStats().slice(0,10);
+  return "🏆 טבלת העונה\n"+st.map((s,i)=>`${["🥇","🥈","🥉"][i]||(i+1)+"."} ${s.name} · ${s.wins} ניצחונות`+(s.mvp?` · ⭐${s.mvp}`:"")).join("\n")+`\n\nהטבלה המלאה: ${pageUrl()}#stats`;
+}
+function imgSpec(kind){
+  if(kind==="stats"){ const rows=computeStats(); return rows.length?{title:"stats", rows, build:()=>buildStatsCanvas(rows), file:"טבלה"}:null; }
+  const T=S.teams; if(!T) return null;
+  if(kind==="final") return {title:"⚽ הכוחות להשבוע", sections:[{opt:T.options[T.chosen??0]}]};
+  if(kind==="vote") return {title:"🗳️ הצבעה על הכוחות", sections:T.options.map((o,i)=>({label:OPT_NAMES[i],opt:o}))};
+  const i=+kind.slice(3); return {title:`⚽ ${OPT_NAMES[i]}`, sections:[{opt:T.options[i]}]};
+}
+function imgKey(kind,spec){ return spec.rows ? kind+"|"+JSON.stringify(spec.rows) : kind+"|"+JSON.stringify(spec.sections)+"|"+colorSlots(8).join(",")+"|"+gameLine(); }
+function prepareImg(key,spec){
+  if(readyImgs.has(key)||pendingImgs.has(key)) return;
+  pendingImgs.add(key);
+  (async()=>{
+    await ensureFonts();
+    const cv=spec.build ? spec.build() : buildCanvas(spec.title,spec.sections);
+    const blob=await new Promise(r=>cv.toBlob(r,"image/png"));
+    readyImgs.set(key,{file:new File([blob],spec.rows?"table.png":"teams.png",{type:"image/png"}), url:URL.createObjectURL(blob)});
+    pendingImgs.delete(key); render();
+  })().catch(e=>{ console.error(e); pendingImgs.delete(key); });
+}
+function downloadImg(r){ const a=document.createElement("a"); a.href=r.url; a.download="כוחות.png"; document.body.append(a); a.click(); a.remove(); toast("התמונה נשמרה. צרף אותה בוואטסאפ"); }
+function shareImg(key){
+  const r=readyImgs.get(key); if(!r){ toast("התמונה עוד בהכנה, נסה שוב"); return; }
+  const data={files:[r.file]};
+  if(navigator.canShare && navigator.canShare(data)) navigator.share(data).catch(e=>{ if(e.name!=="AbortError") downloadImg(r); });
+  else downloadImg(r);
+}
+function imageShare(kind, text){
+  const spec=imgSpec(kind); if(!spec) return null;
+  const key=imgKey(kind,spec), ready=readyImgs.get(key);
+  if(!ready) prepareImg(key,spec);
+  const open=S.showImg===key, textOpen=S.showText===key;
+  return h("div",{class:"imgshare"},
+    h("button",{class:"btn wa full",disabled:!ready,onclick:()=>shareImg(key)}, ready?"📷 שלח כתמונה בוואטסאפ":"מכין תמונה…"),
+    h("div",{class:"imglinks"},
+      ready ? h("button",{class:"linkbtn",onclick:()=>{S.showImg=open?null:key;render();}}, open?"הסתר תצוגה":"👁️ הצג את התמונה") : null,
+      text ? h("button",{class:"linkbtn",onclick:()=>{S.showText=textOpen?null:key;render();}}, textOpen?"סגור":"✏️ שלח כטקסט") : null),
+    open && ready ? h("img",{class:"preview",src:ready.url,alt:"תצוגה מקדימה"}) : null,
+    textOpen && text ? shareRow(text) : null);
+}
+
+// ---------- push notifications ----------
+let messaging=null;
+async function initPush(){
+  if(!VAPID_KEY){ S.pushState="off"; return; }
+  try{
+    if(!("serviceWorker" in navigator) || !("Notification" in window) || !(await isSupported())){ S.pushState = (isIOS() && !isStandalone()) ? "ios-browser" : "unsupported"; render(); return; }
+    messaging=getMessaging(app);
+    onMessage(messaging, p=>{ const n=p.notification||{}; toast(`${n.title||""} ${n.body||""}`); });
+    S.pushState = Notification.permission==="granted" ? (lsGet("pushOn")?"on":"ask") : Notification.permission==="denied" ? "denied" : "ask";
+    if(Notification.permission==="granted") refreshToken(false);
+  }catch(e){ console.warn("push",e); S.pushState="unsupported"; }
+  render();
+}
+async function refreshToken(interactive){
+  try{
+    const reg=await navigator.serviceWorker.register("firebase-messaging-sw.js",{scope:"./"});
+    const token=await getToken(messaging,{vapidKey:VAPID_KEY, serviceWorkerRegistration:reg});
+    if(!token) throw new Error("no token");
+    if(S.uid && token!==lsGet("pushToken:"+S.uid)){ await setDoc(doc(db,"tokens",S.uid),{token, at:serverTimestamp()}); lsSet("pushToken:"+S.uid, token); }
+    lsSet("pushOn","1"); S.pushState="on"; S.myToken=token; render();
+    if(S.isAdmin) registerAdminDevice();
+    if(interactive) toast("🔔 התראות הופעלו!");
+  }catch(e){ console.warn("token",e); if(interactive) toast("לא הצלחתי להפעיל התראות"); }
+}
+// the organizer's devices: they keep getting notifications when player notifications are off
+async function registerAdminDevice(){
+  if(!S.isOwner || !S.myToken) return;   // only the main organizer's devices are kept
+  if(lsGet("adminDevSaved")===S.myToken+"|3"){ S.adminPushOk=true; return; }
+  const email=String((auth.currentUser&&auth.currentUser.email)||"").toLowerCase();
+  if(!email) return;
+  try{
+    // each organizer's devices are kept with his email, so "only me" reaches only the owner's own phones
+    const ref=doc(db,"admin","push"), cur=await getDoc(ref);
+    const devices=((cur.exists()&&cur.data().devices)||[]).filter(d=>d && d.token && d.token!==S.myToken && String(d.email||"").toLowerCase()===email);
+    const ua=navigator.userAgent, dev=/iPhone/.test(ua)?"אייפון":/iPad/.test(ua)?"אייפד":/Android/.test(ua)?"אנדרואיד":/Macintosh/.test(ua)?"מק":/Windows/.test(ua)?"מחשב":"מכשיר";
+    devices.push({token:S.myToken, email, dev, at:Date.now()});
+    await setDoc(ref,{devices:devices.slice(-10)});
+    lsSet("adminDevSaved",S.myToken+"|3");
+    S.adminPushOk=true; render();
+  }catch(e){ console.warn("admin push",e); }
+}
+async function enablePush(){
+  if(!messaging) return;
+  const perm=await Notification.requestPermission();
+  if(perm!=="granted"){ S.pushState="denied"; render(); toast("ההתראות נחסמו. אפשר להפעיל אותן בהגדרות הדפדפן"); return; }
+  await refreshToken(true);
+}
+function pushBox(){
+  const st=S.pushState;
+  if(st==="off"||st==="unsupported"||st==="unknown") return null;
+  if(st==="on") return h("div",{class:"pushon"},"🔔 התראות פעילות");
+  if(st==="ios-browser") return h("div",{class:"pushask"},"🔔 רוצה התראות כשההרשמה נפתחת, כשמתפנה מקום וכשהכוחות מתפרסמים? באייפון צריך קודם להוסיף את האפליקציה למסך הבית ולפתוח אותה משם.");
+  if(st==="denied") return h("div",{class:"pushask"},"🔕 ההתראות חסומות. אפשר להפעיל אותן בהגדרות הדפדפן עבור האתר הזה.");
+  return h("div",null,
+    h("button",{class:"btn ghost full pushbtn",onclick:enablePush},"🔔 הפעל התראות"),
+    h("div",{class:"pushask",style:"margin-top:4px;text-align:center"},"נודיע לך כשההרשמה נפתחת, כשמתפנה לך מקום וכשהכוחות מתפרסמים"));
+}
+
+
+// ---------- match timer ----------
+const TM = (()=>{ let t={}; try{ t=JSON.parse(localStorage.getItem("timer")||"{}"); }catch(e){} 
+  return {game:7, extra:1, cap:10, phase:"idle", running:false, endAt:0, left:0, match:1, total:0, used:0, ...t}; })();
+// time left until the overall cap ("play until the ball goes out, but no more than X minutes in total")
+const capLeft = () => TM.cap>0 ? Math.max(0, TM.cap*60000 - (TM.used||0)) : 0;
+function tmSave(){ lsSet("timer", JSON.stringify(TM)); }
+function tmLeft(){ return TM.running ? Math.max(0, TM.endAt-Date.now()) : TM.left; }
+let audioCtx=null, wakeLock=null, tmTick=null, lastBeep=-1;
+function unlockAudio(){ try{ audioCtx=audioCtx||new (window.AudioContext||window.webkitAudioContext)(); if(audioCtx.state==="suspended") audioCtx.resume(); }catch(e){} }
+function tone(freq, start, dur, vol=0.25, type="square"){
+  if(!audioCtx) return;
+  const o=audioCtx.createOscillator(), g=audioCtx.createGain(), t=audioCtx.currentTime+start;
+  o.type=type; o.frequency.setValueAtTime(freq,t);
+  g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(vol,t+0.02); g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+  o.connect(g); g.connect(audioCtx.destination); o.start(t); o.stop(t+dur+0.05);
+}
+function whistle(long){
+  // referee-style trill: fast warble around 2.6kHz
+  if(!audioCtx) return;
+  const n=long?3:1;
+  for(let k=0;k<n;k++){
+    const base=k*0.55, len=k===n-1&&long?0.9:0.35;
+    const o=audioCtx.createOscillator(), g=audioCtx.createGain(), lfo=audioCtx.createOscillator(), lg=audioCtx.createGain(), t=audioCtx.currentTime+base;
+    o.type="sine"; o.frequency.setValueAtTime(2600,t); lfo.frequency.setValueAtTime(28,t); lg.gain.setValueAtTime(180,t);
+    lfo.connect(lg); lg.connect(o.frequency);
+    g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(0.5,t+0.02); g.gain.setValueAtTime(0.5,t+len-0.05); g.gain.exponentialRampToValueAtTime(0.0001,t+len);
+    o.connect(g); g.connect(audioCtx.destination); o.start(t); lfo.start(t); o.stop(t+len+0.05); lfo.stop(t+len+0.05);
+  }
+  try{ navigator.vibrate && navigator.vibrate(long?[400,150,400,150,800]:[300]); }catch(e){}
+}
+// keep the screen on while the timer runs: Wake Lock where it works, a tiny silent looping video otherwise (older iPhones)
+const NOSLEEP_MP4="data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAMvbW9vdgAAAGxtdmhkAAAAAAAAAAAAAAAAAAAD6AAAB9AAAQAAAQAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAll0cmFrAAAAXHRraGQAAAADAAAAAAAAAAAAAAABAAAAAAAAB9AAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAABAAAAAQAAAAAAAkZWR0cwAAABxlbHN0AAAAAAAAAAEAAAfQAAAAAAABAAAAAAHRbWRpYQAAACBtZGhkAAAAAAAAAAAAAAAAAABAAAAAgABVxAAAAAAALWhkbHIAAAAAAAAAAHZpZGUAAAAAAAAAAAAAAABWaWRlb0hhbmRsZXIAAAABfG1pbmYAAAAUdm1oZAAAAAEAAAAAAAAAAAAAACRkaW5mAAAAHGRyZWYAAAAAAAAAAQAAAAx1cmwgAAAAAQAAATxzdGJsAAAAvHN0c2QAAAAAAAAAAQAAAKxhdmMxAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAABAAEABIAAAASAAAAAAAAAABFUxhdmM2MC4zMS4xMDIgbGlieDI2NAAAAAAAAAAAAAAAGP//AAAAMmF2Y0MBZAAK/+EAF2dkAAqs2V7ARAAAAwAEAAADAAg8SJZYAQAEaO+Py/34+AAAAAAQcGFzcAAAAAEAAAABAAAAFGJ0cnQAAAAAAAALUAAAC1AAAAAYc3R0cwAAAAAAAAABAAAAAgAAQAAAAAAUc3RzcwAAAAAAAAABAAAAAQAAABxzdHNjAAAAAAAAAAEAAAABAAAAAgAAAAEAAAAcc3RzegAAAAAAAAAAAAAAAgAAAscAAAANAAAAFHN0Y28AAAAAAAAAAQAAA18AAABidWR0YQAAAFptZXRhAAAAAAAAACFoZGxyAAAAAAAAAABtZGlyYXBwbAAAAAAAAAAAAAAAAC1pbHN0AAAAJal0b28AAAAdZGF0YQAAAAEAAAAATGF2ZjYwLjE2LjEwMAAAAAhmcmVlAAAC3G1kYXQAAAKsBgX//6jcRem95tlIt5Ys2CDZI+7veDI2NCAtIGNvcmUgMTY0IHIzMTA4IDMxZTE5ZjkgLSBILjI2NC9NUEVHLTQgQVZDIGNvZGVjIC0gQ29weWxlZnQgMjAwMy0yMDIzIC0gaHR0cDovL3d3dy52aWRlb2xhbi5vcmcveDI2NC5odG1sIC0gb3B0aW9uczogY2FiYWM9MSByZWY9MSBkZWJsb2NrPTE6LTM6LTMgYW5hbHlzZT0weDM6MHgzIG1lPWhleCBzdWJtZT0yIHBzeT0xIHBzeV9yZD0yLjAwOjAuNzAgbWl4ZWRfcmVmPTAgbWVfcmFuZ2U9MTYgY2hyb21hX21lPTEgdHJlbGxpcz0wIDh4OGRjdD0xIGNxbT0wIGRlYWR6b25lPTIxLDExIGZhc3RfcHNraXA9MSBjaHJvbWFfcXBfb2Zmc2V0PTAgdGhyZWFkcz0xIGxvb2thaGVhZF90aHJlYWRzPTEgc2xpY2VkX3RocmVhZHM9MCBucj0wIGRlY2ltYXRlPTEgaW50ZXJsYWNlZD0wIGJsdXJheV9jb21wYXQ9MCBjb25zdHJhaW5lZF9pbnRyYT0wIGJmcmFtZXM9MyBiX3B5cmFtaWQ9MiBiX2FkYXB0PTEgYl9iaWFzPTAgZGlyZWN0PTEgd2VpZ2h0Yj0xIG9wZW5fZ29wPTAgd2VpZ2h0cD0xIGtleWludD0yNTAga2V5aW50X21pbj0xIHNjZW5lY3V0PTQwIGludHJhX3JlZnJlc2g9MCByY19sb29rYWhlYWQ9MTAgcmM9Y3JmIG1idHJlZT0xIGNyZj0yMy4wIHFjb21wPTAuNjAgcXBtaW49MCBxcG1heD02OSBxcHN0ZXA9NCBpcF9yYXRpbz0xLjQwIGFxPTE6MS4yMACAAAAAE2WIhAAXzn/s/8JV/9j2RKK///EAAAAJQZohGIL5z/7w";
+let awakeVid=null;
+function awakeVideo(on){
+  try{
+    if(on){
+      if(!awakeVid){
+        awakeVid=document.createElement("video");
+        awakeVid.setAttribute("playsinline",""); awakeVid.setAttribute("muted",""); awakeVid.muted=true; awakeVid.loop=true;
+        awakeVid.style.cssText="position:fixed;width:1px;height:1px;opacity:0.01;pointer-events:none;bottom:0;left:0";
+        awakeVid.src=NOSLEEP_MP4; document.body.appendChild(awakeVid);
+      }
+      const p=awakeVid.play(); if(p&&p.catch) p.catch(()=>{});
+    } else if(awakeVid){ awakeVid.pause(); }
+  }catch(e){}
+}
+async function keepAwake(on){
+  S.awake=!!on;
+  let ok=false;
+  try{
+    if(on && "wakeLock" in navigator){
+      if(!wakeLock){ wakeLock=await navigator.wakeLock.request("screen"); wakeLock.addEventListener("release",()=>{ wakeLock=null; }); }
+      ok=true;
+    }
+    if(!on && wakeLock){ await wakeLock.release(); wakeLock=null; }
+  }catch(e){ ok=false; }
+  awakeVideo(on && (!ok || isIOS()));   // iPhone home-screen apps often ignore Wake Lock, so use both there
+}
+document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="visible"){ if(TM.running) keepAwake(true); tmCheck(); render(); } });
+function tmStart(phase, quiet){
+  unlockAudio();
+  if(phase==="game") TM.used=0;
+  const ms = phase==="out" ? capLeft() : (phase==="extra" ? TM.extra : TM.game)*60000;
+  if(ms<=0){ tmFinish(); return; }
+  Object.assign(TM,{phase, running:true, endAt:Date.now()+ms, left:ms, total:ms});
+  lastBeep=-1; tmSave(); keepAwake(true); if(!quiet) whistle(false); tmLoop(); render();
+}
+function tmBank(){ TM.used=(TM.used||0)+Math.max(0,(TM.total||0)-tmLeft()); }
+function tmPause(){ unlockAudio(); if(!TM.running) return; TM.left=tmLeft(); TM.running=false; tmSave(); keepAwake(false); render(); }
+function tmResume(){ unlockAudio(); if(TM.running||TM.left<=0) return; TM.endAt=Date.now()+TM.left; TM.running=true; tmSave(); keepAwake(true); tmLoop(); render(); }
+function tmAdjust(ms){
+  if(TM.running){ TM.endAt=Math.max(Date.now()+1000, TM.endAt+ms); }
+  else TM.left=Math.max(1000, TM.left+ms);
+  TM.total=Math.max(TM.total, tmLeft()); tmSave(); tmPaint();
+}
+function tmEndPhase(){
+  tmBank(); TM.running=false; TM.left=0;
+  if(TM.phase==="extra" && capLeft()>0){
+    // extra time is over but the ball may still be in play: keep going until it goes out, up to the cap
+    whistle(false); setTimeout(()=>whistle(false),450);
+    tmStart("out", true); toast("⚽ ממשיכים עד שהכדור יוצא"); return;
+  }
+  TM.phase = TM.phase==="game" ? "gameover" : "over";
+  tmSave(); keepAwake(false); whistle(true); render();
+}
+function tmFinish(){ if(TM.running||TM.left) tmBank(); TM.running=false; TM.left=0; TM.phase="over"; tmSave(); keepAwake(false); render(); }
+function tmBallOut(){ unlockAudio(); tmBank(); TM.running=false; TM.left=0; TM.phase="over"; tmSave(); keepAwake(false); whistle(true); render(); }
+function tmNext(){ TM.match=(TM.match||1)+1; TM.phase="idle"; TM.running=false; TM.left=0; tmSave(); render(); }
+function tmResetAll(){ Object.assign(TM,{phase:"idle",running:false,left:0,endAt:0,match:1,total:0,used:0}); tmSave(); keepAwake(false); render(); }
+function tmCheck(){
+  if(!TM.running) return;
+  const left=tmLeft();
+  const sec=Math.ceil(left/1000);
+  if(sec<=3 && sec>=1 && sec!==lastBeep){ lastBeep=sec; tone(1200,0,0.12,0.2,"sine"); }
+  if(left<=0) tmEndPhase();
+}
+function tmLoop(){
+  if(tmTick) return;
+  tmTick=setInterval(()=>{ if(!TM.running){ clearInterval(tmTick); tmTick=null; return; } tmCheck(); tmPaint(); },200);
+}
+const fmtClock = ms => { const s=Math.ceil(ms/1000); return `${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`; };
+function tmPaint(){
+  const d=$("tdisp"); if(!d) return;
+  const left=tmLeft(); d.textContent=fmtClock(left);
+  const ring=$("tring"); if(ring){ const p=TM.total?left/TM.total:1; ring.style.strokeDashoffset=String(691*(1-p)); }
+  d.classList.toggle("hot", TM.running && left<=10000);
+}
+if(TM.running) tmLoop();
+
+// anyone can record who won a mini-game; a transaction keeps simultaneous taps from overwriting each other
+async function addWin(i, delta){
+  const T=S.teams; if(!T||T.status!=="final") return false;
+  const opt=T.options[T.chosen??0], slots=optColorSlots(opt), ref=doc(db,"history",String(T.at));
+  try{
+    await runTransaction(db, async tx=>{
+      const cur=await tx.get(ref), base=cur.exists()?cur.data():{};
+      const teams=opt.teams.map((t,j)=>({players:t.players, subs:t.subs||[], color:slots[j],
+        wins:Math.max(0, (((base.teams||[])[j]||{}).wins||0) + (j===i?delta:0))}));
+      const rec={at:T.at, date:base.date||Date.now(), teams}; if(base.mvp) rec.mvp=base.mvp;
+      tx.set(ref, rec);
+    });
+    return true;
+  }catch(e){ console.error(e); toast(e&&e.code==="permission-denied"?"אין הרשאה, המארגן צריך לעדכן את חוקי האבטחה":"לא נשמר, נסה שוב"); return false; }
+}
+function winPick(){
+  const T=S.teams;
+  if(!T || T.status!=="final") return S.isAdmin ? null : null;
+  const opt=T.options[T.chosen??0], saved=S.history.find(x=>x.id===String(T.at));
+  const wins=opt.teams.map((_,i)=>(((saved&&saved.teams)||[])[i]||{}).wins||0);
+  const ended=TM.phase==="over"||TM.phase==="gameover";
+  const last=S.lastWin && S.lastWin.at===T.at ? S.lastWin : null;
+  return h("div",{class:"card"},
+    h("h2",null,"🏆 מי ניצח את המשחקון?"),
+    h("div",{class:"winbtns"},opt.teams.map((t,i)=>{ const c=optColor(opt,i), light=lum(c.c)>0.62;
+      return h("button",{class:"winbtn",style:`background:${c.c};color:${light?"#14201a":"#fff"}${c.c==="#ffffff"?";box-shadow:inset 0 0 0 2px #d1d5db":""}`,
+        onclick:async()=>{ if(S.winBusy) return; S.winBusy=true;
+          const ok=await addWin(i,1); S.winBusy=false;
+          if(ok){ S.lastWin={at:T.at,i}; toast(`+1 ל${c.n} 🏆`); if(ended) tmNext(); else render(); } }},
+        h("b",null,c.n), h("span",null,`${wins[i]} ניצחונות`)); })),
+    h("div",{class:"winlinks"},
+      h("button",{class:"linkbtn",onclick:()=>{ toast("תיקו, לא נספר ניצחון"); if(ended) tmNext(); }},"🤝 תיקו"),
+      last ? h("button",{class:"linkbtn muted",onclick:async()=>{ const ok=await addWin(last.i,-1); if(ok){ toast(`בוטל הניצחון של ${optColor(opt,last.i).n}`); S.lastWin=null; render(); } }},"↩ בטל את מה שסימנתי") : null),
+    h("div",{class:"hint"},"כל אחד יכול לסמן, והניצחון נשמר מיד בטבלה ומופיע אצל כולם. תסמנו רק פעם אחת לכל משחקון 🙂"));
+}
+function viewTimer(){
+  const out=[], left=tmLeft(), ph=TM.phase, running=TM.running;
+  const label = ph==="extra" ? "⏱️ הארכה" : ph==="out" ? "⚽ עד שהכדור יוצא" : ph==="gameover" ? "⏰ הזמן נגמר!" : ph==="over" ? "🏁 המשחקון הסתיים" : `⚽ משחקון ${TM.match||1}`;
+  const showLeft = ph==="idle" ? TM.game*60000 : left;
+  const total = ph==="idle" ? TM.game*60000 : (TM.total||1);
+  const p = total ? showLeft/total : 1;
+  out.push(h("div",{class:"card timer"+(ph==="gameover"||ph==="over"?" ended":"")+(ph==="extra"?" extra":"")+(ph==="out"?" out":"")},
+    h("div",{class:"tlabel"},label),
+    ph==="out" ? h("div",{class:"tsub"},`עד ${TM.cap} דק׳ בסך הכל · נשאר עד הסוף:`) : null,
+    h("div",{class:"tclock"},
+      (()=>{ const ns="http://www.w3.org/2000/svg", svg=document.createElementNS(ns,"svg"); svg.setAttribute("viewBox","0 0 240 240"); svg.setAttribute("class","tsvg");
+        const bg=document.createElementNS(ns,"circle"); bg.setAttribute("cx","120"); bg.setAttribute("cy","120"); bg.setAttribute("r","110"); bg.setAttribute("class","tbg");
+        const fg=document.createElementNS(ns,"circle"); fg.setAttribute("cx","120"); fg.setAttribute("cy","120"); fg.setAttribute("r","110"); fg.setAttribute("class","tfg"); fg.id="tring";
+        fg.style.strokeDasharray="691"; fg.style.strokeDashoffset=String(691*(1-p));
+        svg.append(bg,fg); return svg; })(),
+      h("div",{id:"tdisp",class:"tdisp"+(running&&left<=10000?" hot":"")},fmtClock(showLeft))),
+    running ? h("div",{class:"tsub",style:"margin-top:4px"},"🔆 המסך יישאר דלוק בזמן שהטיימר רץ") : null,
+    // controls
+    ph==="idle" ? h("button",{class:"btn full big tbtn",onclick:()=>tmStart("game")},`▶️ התחל משחקון (${TM.game} דק׳)`) : null,
+    (ph==="game"||ph==="extra") ? h("div",{class:"tctl"},
+      h("button",{class:"btn ghost",onclick:()=>tmAdjust(-60000)},"−1 דק׳"),
+      running ? h("button",{class:"btn big tmain",onclick:tmPause},"⏸ עצור") : h("button",{class:"btn big tmain",onclick:tmResume},"▶️ המשך"),
+      h("button",{class:"btn ghost",onclick:()=>tmAdjust(60000)},"+1 דק׳")) : null,
+    (ph==="game"||ph==="extra") ? h("button",{class:"linkbtn",onclick:tmFinish},"⏹ סיים את המשחקון עכשיו") : null,
+    ph==="out" ? h("div",{class:"tctl col"},
+      h("button",{class:"btn full big tbtn ballout",onclick:tmBallOut},"🛑 הכדור יצא, סיום"),
+      running ? h("button",{class:"btn ghost full",onclick:tmPause},"⏸ עצור שעון") : h("button",{class:"btn ghost full",onclick:tmResume},"▶️ המשך")) : null,
+    ph==="gameover" ? h("div",{class:"tctl col"},
+      TM.extra>0 ? h("button",{class:"btn full big tbtn extra",onclick:()=>tmStart("extra")},`⏱️ הארכה (${TM.extra} דק׳)`) : null,
+      TM.cap>0 && capLeft()>0 ? h("button",{class:"btn full tbtn outbtn",onclick:()=>tmStart("out")},`⚽ עד שהכדור יוצא (עוד ${fmtClock(capLeft())} מקס׳)`) : null,
+      h("button",{class:"btn ghost full",onclick:tmFinish},"✔ סיים")) : null,
+    ph==="over" ? h("button",{class:"btn full big tbtn",onclick:tmNext},"▶️ משחקון הבא") : null));
+  out.push(winPick());
+  // settings
+  const step=(lbl,key,min,max)=>h("div",{class:"stepper"},
+    h("div",{class:"lbl"},h("b",null,lbl)),
+    h("div",{class:"ctrl"},
+      h("button",{onclick:()=>{ if(TM[key]>min){ TM[key]--; tmSave(); render(); } }},"−"),
+      h("output",null,TM[key]),
+      h("button",{onclick:()=>{ if(TM[key]<max){ TM[key]++; tmSave(); render(); } }},"+")));
+  out.push(h("div",{class:"card"},
+    h("h2",null,"⚙️ זמנים"),
+    step("דקות למשחקון","game",1,60),
+    step("דקות הארכה (0 = בלי)","extra",0,15),
+    step("מקסימום כולל, עד שהכדור יוצא (0 = בלי)","cap",0,60),
+    TM.cap>0 && TM.cap<=TM.game+TM.extra ? h("div",{class:"hint",style:"color:#fbbf24"},`⚠️ המקסימום צריך להיות גדול מ-${TM.game+TM.extra} דק׳ (משחק + הארכה), אחרת השלב הזה לא יופעל.`) : null,
+    h("div",{class:"chips"},[[7,1,10],[7,2,10],[8,1,10],[5,1,8],[10,2,13]].map(([g,e,c])=>h("button",{class:"chip"+(TM.game===g&&TM.extra===e&&TM.cap===c?" on":""),onclick:()=>{ TM.game=g; TM.extra=e; TM.cap=c; tmSave(); render(); }},`${g}+${e} עד ${c}`))),
+    h("div",{class:"hint",style:"margin-top:6px"},"איך זה עובד: משחק ⬅ הארכה ⬅ אם הכדור עדיין במשחק, ממשיכים עד שהוא יוצא, אבל לא יותר מהמקסימום הכולל. כשהכדור יוצא לוחצים ״הכדור יצא״."),
+    h("div",{class:"hint",style:"margin-top:8px"},"🔊 בסוף כל משחקון תהיה שריקה ורטט, והמסך יישאר דלוק כל עוד הטיימר רץ. שים את הטלפון על צלצול, לא על שקט."),
+    TM.match>1||ph!=="idle" ? h("button",{class:"linkbtn",onclick:tmResetAll},"↺ אפס טיימר ומספור משחקונים") : null));
+  return out;
+}
+
+// ---------- install (home screen) ----------
+let installEvt=null;
+window.addEventListener("beforeinstallprompt", e=>{ e.preventDefault(); installEvt=e; render(); });
+const isStandalone = () => window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone===true;
+const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent);
+function installCard(){
+  if(isStandalone() || lsGet("installDismissed")) return null;
+  return h("div",{class:"card install"},
+    h("button",{class:"ic x close",title:"סגור",onclick:()=>{ lsSet("installDismissed","1"); render(); }},"×"),
+    h("b",null,"📲 שים את האפליקציה במסך הבית"),
+    installEvt
+      ? h("button",{class:"btn full",style:"margin-top:8px",onclick:async()=>{ installEvt.prompt(); try{ await installEvt.userChoice; }catch(e){} installEvt=null; render(); }},"הוסף למסך הבית")
+      : h("div",{class:"hint",style:"margin-top:4px"}, isIOS()
+          ? "בספארי: לחץ על כפתור השיתוף ⬆️ למטה, ואז ״הוסף למסך הבית״."
+          : "בכרום: לחץ על ⋮ למעלה, ואז ״הוסף למסך הבית״ או ״התקן אפליקציה״."),
+    h("div",{class:"hint",style:"margin-top:4px"},"חשוב: אחרי שהוספת, תמיד תיכנס דרך האייקון, כדי שתוכל לבטל הרשמה."));
+}
+
+// ---------- anonymous rating survey ----------
+const surveyOpen = () => !!(S.survey && S.survey.open);
+async function openSurvey(names){
+  if(names.length<2){ toast("בחר לפחות 2 שחקנים"); return; }
+  const sv={open:true, round:Date.now(), names, max:RATING_MAX};
+  S.survey=sv; S.surveySel=null; render();
+  await run(()=>setDoc(surveyRef,sv),"⭐ הסקר נפתח");
+}
+async function addSurveyName(){
+  const n=clean(S.draft.survName||""); if(!n){ toast("כתוב שם"); return; }
+  delete S.draft.survName;
+  if(surveyOpen()){
+    const names=S.survey.names||[];
+    if(names.some(x=>norm(x)===norm(n))){ toast("כבר בסקר"); render(); return; }
+    S.survey={...S.survey, names:names.concat([n])}; render();
+    await run(()=>updateDoc(surveyRef,{names:S.survey.names}),`נוסף לסקר: ${n}`);
+  } else {
+    S.surveyExtra=(S.surveyExtra||[]); if(!S.surveyExtra.some(x=>norm(x)===norm(n))) S.surveyExtra.push(n);
+    S.surveySel=S.surveySel||new Set(); S.surveySel.add(n); render();
+  }
+}
+function surveyAddRow(){
+  return h("div",{class:"addrow",style:"margin-top:10px"},
+    h("input",{id:"f_survName",type:"text",placeholder:"הוסף שם ידנית",autocomplete:"off",value:S.draft.survName??"",oninput:e=>{S.draft.survName=e.target.value;},onkeydown:e=>{ if(e.key==="Enter") addSurveyName(); }}),
+    h("button",{class:"btn",onclick:addSurveyName},"הוסף"));
+}
+async function closeSurvey(){ await run(()=>updateDoc(surveyRef,{open:false, closedAt:Date.now()}),"הסקר נסגר"); }
+function applySurveyAverages(){
+  const res=S.surveyResults; if(!res || res.round!==(S.survey&&S.survey.round)){ toast("אין עדיין תוצאות"); return; }
+  const avg=res.avg||{}; let n=0;
+  const list=S.ratings.slice();
+  (S.survey.names||[]).forEach(name=>{
+    const a=avg[norm(name)]; if(!a||!a.n) return;
+    const r=Math.round(a.a*10)/10, i=list.findIndex(x=>norm(x.n)===norm(name));
+    if(i>=0) list[i]={...list[i], r, since:Date.now()}; else list.push({n:name, r, gk:false, since:Date.now()});
+    n++;
+  });
+  S.ratings=list; render(); saveRoster(true);
+  toast(`עודכנו ${n} דירוגים לפי הסקר ✔`);
+}
+async function submitVote(){
+  const sv=S.survey; if(!sv||!sv.open) return;
+  const d=S.voteDraft||{}, r={};
+  Object.entries(d).forEach(([k,v])=>{ if(v>=1 && v<=sv.max) r[k]=v; });
+  if(!Object.keys(r).length){ toast("דרג לפחות שחקן אחד"); return; }
+  const ok=await run(()=>setDoc(doc(db,"surveyVotes",S.uid),{round:sv.round, r}),"✔ הדירוג נשלח, תודה!");
+  if(ok){ S.myVote={round:sv.round, r}; S.surveyOpenUI=false; render(); }
+}
+function surveyText(){ return `⭐ סקר דירוגים אנונימי לכדורגל!\nדרגו את השחקנים מ-1 עד ${RATING_MAX}. אף אחד לא רואה מה כל אחד דירג, רק ממוצע.\n${pageUrl()}#survey`; }
+function surveyCard(){
+  const sv=S.survey; if(!sv||!sv.open) return null;
+  const voted=S.myVote && S.myVote.round===sv.round;
+  if(!S.surveyOpenUI) return h("button",{class:"card votecall survcall",onclick:()=>{ S.surveyOpenUI=true; S.voteDraft = voted ? {...S.myVote.r} : (S.voteDraft||{}); render(); }},
+    h("b",null,"⭐ סקר דירוגים אנונימי"), h("span",null, voted?"✔ דירגת · לחץ כדי לעדכן":"עזור לאזן את הכוחות: דרג את השחקנים"));
+  if(!S.isAdmin && !loggedIn()) return loginCard("כדי לדרג צריך להתחבר פעם אחת עם הטלפון. הדירוג נשאר אנונימי.");
+  if(!S.isAdmin && loggedIn() && !lsGet("myName")) return loginCard();
+  if(S.isAdmin && !lsGet("myName")) return h("div",{class:"card surv"},
+    h("h2",null,"⭐ סקר דירוגים"),
+    h("div",{class:"hint"},"כדי לדרג בשמך (ולא לדרג את עצמך), חבר קודם את הטלפון שלך."),
+    h("button",{class:"btn ghost full",style:"margin-top:8px",onclick:needMyName},"📱 חבר את הטלפון שלי"));
+  const me=norm(lsGet("myName")), d=S.voteDraft||(S.voteDraft={});
+  const names=(sv.names||[]).filter(n=>norm(n)!==me);
+  return h("div",{class:"card surv"},
+    h("h2",null,"⭐ סקר דירוגים",h("span",{class:"count"},`${Object.keys(d).filter(k=>d[k]).length}/${names.length}`)),
+    h("div",{class:"hint"},"מדרג בתור: ",h("b",null,lsGet("myName")||"לא ידוע")),
+    h("div",{class:"hint"},`1 = חלש, ${sv.max} = חזק מאוד. אם אתה לא מכיר מישהו, דלג עליו. הדירוג אנונימי: אף אחד לא רואה מה דירגת, רק ממוצע של כולם.`),
+    names.map(n=>{ const k=norm(n), v=d[k]||0;
+      return h("div",{class:"survrow"},
+        h("span",{class:"pn"},n),
+        h("div",{class:"nums"},Array.from({length:sv.max},(_,i)=>i+1).map(i=>h("button",{class:"num-b"+(v===i?" on":""),onclick:()=>{ d[k]=v===i?0:i; render(); }},i)))); }),
+    h("div",{class:"share",style:"margin-top:12px"},
+      h("button",{class:"btn ghost",onclick:()=>{S.surveyOpenUI=false;render();}},"סגור"),
+      h("button",{class:"btn",onclick:submitVote},voted?"עדכן דירוג":"שלח דירוג")));
+}
+function surveyAdminCard(){
+  const sv=S.survey, res=S.surveyResults, open=surveyOpen();
+  const fresh=res && sv && res.round===sv.round;
+  if(!open && !(sv && fresh)){
+    const kn=knownNames(), names=kn.concat((S.surveyExtra||[]).filter(x=>!kn.some(k=>norm(k)===norm(x)))), sel=S.surveySel || (S.surveySel=new Set(S.signups.slice(0,S.cfg.capacity).map(s=>s.name)));
+    return h("div",{class:"card"},
+      h("h2",null,"⭐ סקר דירוגים"),
+      h("div",{class:"hint"},"השחקנים מדרגים אחד את השני באנונימיות, ואתה רואה רק ממוצע לכל שחקן. בחר את מי לדרג:"),
+      h("div",{class:"winlinks",style:"justify-content:flex-start"},
+        h("button",{class:"linkbtn",onclick:()=>{ S.surveySel=new Set(names); render(); }},"בחר הכל"),
+        h("button",{class:"linkbtn muted",onclick:()=>{ S.surveySel=new Set(); render(); }},"נקה")),
+      h("div",{class:"chips"},names.map(n=>h("button",{class:"chip"+(sel.has(n)?" on":""),onclick:()=>{ sel.has(n)?sel.delete(n):sel.add(n); render(); }},n))),
+      surveyAddRow(),
+      h("button",{class:"btn full",style:"margin-top:10px",onclick:()=>openSurvey([...sel])},`⭐ פתח סקר (${sel.size} שחקנים)`));
+  }
+  const avg=(fresh&&res.avg)||{};
+  const rows=(sv.names||[]).map(n=>({n, a:avg[norm(n)]})).sort((x,y)=>((y.a&&y.a.a)||0)-((x.a&&x.a.a)||0));
+  return h("div",{class:"card"},
+    h("h2",null,"⭐ סקר דירוגים",h("span",{class:"count"},`${(fresh&&res.voters)||0} הצביעו`)),
+    open ? h("div",{class:"hint"},"הסקר פתוח. התוצאות מתעדכנות כל פעם שמישהו מדרג.") : h("div",{class:"hint"},"הסקר סגור."),
+    open ? h("div",null,h("div",{class:"hint",style:"margin-top:6px"},"שלח לקבוצה:"),shareRow(surveyText())) : null,
+    (()=>{ const who=(fresh&&res.who)||[], ws=new Set(who.map(norm));
+      const not=(sv.names||[]).filter(n=>!ws.has(norm(n)));
+      return h("div",null,
+        h("div",{class:"sub-h"},`✔ ענו (${who.length})`),
+        who.length ? h("div",{class:"chips"},who.map(n=>{ const inSv=(sv.names||[]).some(x=>norm(x)===norm(n));
+          return h("button",{class:"chip on"+(S.aliasFor===n?" sel":""),onclick:()=>{ S.aliasFor=S.aliasFor===n?null:n; render(); }},n); })) : h("div",{class:"hint"},"עוד אף אחד"),
+        S.aliasFor ? h("div",{class:"aliasbox"},
+          ((res&&res.votes)||[]).filter(v=>norm(v.name)===norm(S.aliasFor)).map((v,i,arr)=>h("div",{class:"logp"},
+            h("span",{class:"pn"},`🗳️ הצבעה${arr.length>1?" "+(i+1):""}`+(v.at?` · ${fmtTime(v.at)}`:"")+(v.used?"":" (לא נספרת)")),
+            h("button",{class:"btn ghost",style:"padding:6px 12px",onclick:async()=>{
+              if(!confirm(`למחוק את ההצבעה הזו של ${S.aliasFor}?`)) return;
+              await run(()=>deleteDoc(doc(db,"surveyVotes",v.id)),"🗑️ ההצבעה נמחקה"); }},"🗑️ מחק"))),
+          ) : null,
+        h("div",{class:"hint"},"רואים רק מי ענה, לא מה הוא דירג. לחץ על שם כדי למחוק לו הצבעה."),
+        h("button",{class:"linkbtn",onclick:()=>run(()=>updateDoc(surveyRef,{recalc:Date.now()}),"🔄 התוצאות מחושבות מחדש")},"🔄 חשב תוצאות מחדש")); })(),
+    h("div",{class:"paylist"},rows.map(x=>h("div",{class:"payrow"},
+      h("span",{class:"pn"},x.n),
+      h("span",{class:"ps"},x.a&&x.a.n?`${x.a.n} מדרגים`:"אין עדיין"),
+      h("b",{style:"min-width:36px;text-align:center"},x.a&&x.a.n?(Math.round(x.a.a*10)/10).toFixed(1):"–"),
+      h("span",{class:"ps",style:"min-width:30px;text-align:center"},`(${ratingOf(x.n)})`)))),
+    h("div",{class:"hint",style:"margin-top:4px"},"בסוגריים: הדירוג הנוכחי שלך."),
+    open ? surveyAddRow() : null,
+    h("button",{class:"btn full",style:"margin-top:10px",onclick:applySurveyAverages},"✔ החל ממוצעים על הדירוגים"),
+    open ? h("button",{class:"btn ghost full",style:"margin-top:8px",onclick:closeSurvey},"סגור סקר") :
+      h("button",{class:"linkbtn",onclick:()=>{ S.survey={...sv, round:0}; S.surveySel=null; render(); }},"פתח סקר חדש"));
+}
+
+// ---------- player login settings ----------
+// one tile for players' accounts and devices: logins, notifications, and the notification log
+function asSection(card, open){
+  if(!card) return null;
+  const t=card.querySelector("h2"); const sum=h("summary",{class:"secsum"}); if(t){ sum.append(...t.childNodes); t.remove(); }
+  const key=sum.textContent.trim().slice(0,20); S.secOpen=S.secOpen||{};
+  const d=h("details",{class:"subsec"}); d.open = key in S.secOpen ? S.secOpen[key] : !!open;
+  d.addEventListener("toggle",()=>{ S.secOpen[key]=d.open; });
+  card.classList.remove("card"); d.append(sum, card);
+  return d;
+}
+function loginErrorsCard(){
+  const L=(S.loginErrors||[]); if(!L.length) return null;
+  return h("div",{class:"card"},
+    h("h2",null,"⚠️ שגיאות התחברות",h("span",{class:"count"},String(L.length))),
+    h("div",{class:"hint"},"ניסיונות התחברות שנכשלו בימים האחרונים (4 ספרות אחרונות של הטלפון). שלח לי צילום של זה כדי שאבדוק."),
+    L.slice(0,30).map(x=>h("div",{class:"logp"},
+      h("span",{class:"pn",dir:"ltr",style:"text-align:left;font-size:12px"},`${x.code}${x.ph?" · …"+x.ph:""}`),
+      h("small",null,`${x.stage==="confirm"?"אישור קוד":"שליחת קוד"} · ${x.app==="icon"?"אייקון":"דפדפן"} · ${fmtTime(x.at)}`))));
+}
+function playersDevicesCard(){
+  return h("div",{class:"card"},
+    h("h2",null,"👥 שחקנים ומכשירים"),
+    asSection(loginSettingsCard(), true),
+    S.isOwner ? asSection(loginErrorsCard(), false) : null,
+    S.isOwner ? asSection(pushPeopleCard(), false) : null,
+    S.isOwner ? asSection(pushLogCard(), false) : null);
+}
+function loginSettingsCard(){
+  const v=S.phoneV||new Set();
+  const accts=[...v].map(uid=>({uid, n:nameOfUid(uid)})).sort((a,b)=>(a.n||"תתת").localeCompare(b.n||"תתת","he"));
+  const names=accts.map(a=>a.n||"(בלי שם עדיין)");
+  // signed up from a device that isn't logged in, and hasn't logged in anywhere else under that name either
+  const logged=new Set(names.map(norm));
+  const reg=S.signups.filter(x=>x.uid && x.id===x.uid && !v.has(x.uid) && !logged.has(norm(x.name))).map(x=>x.name);
+  return h("div",{class:"card"},
+    h("h2",null,"🔐 התחברות שחקנים"),
+    h("div",{class:"hint"},"שחקן שמתחבר עם הטלפון (קוד ב-SMS) מזוהה בוודאות מכל מכשיר: בהרשמה, בהצבעות, בסקר ובהתראות."),
+    h("div",{class:"hint",style:"margin-top:6px"},"שחקנים נרשמים, מצביעים ומדרגים רק אחרי התחברות. אתה (ושאר המנהלים) עדיין יכולים להוסיף שחקנים ידנית."),
+    S.isAdmin && !loggedIn() ? h("button",{class:"btn ghost full",style:"margin-top:8px",onclick:()=>{ S.admLinkLater=false; S.tab="list"; render(); window.scrollTo({top:0,behavior:"smooth"}); }},"📱 חבר גם את הטלפון שלי") : null,
+    S.phonesErr ? h("div",{class:"stale"},`⚠️ לא הצלחתי לקרוא את רשימת המחוברים (${S.phonesErr}). סגור ופתח את האפליקציה.`) : null,
+    h("div",{class:"sub-h"},`✔ התחברו (${names.length})`),
+    accts.length ? h("div",{class:"chips"},accts.map(a=>h("button",{class:"chip on"+(S.renameUid===a.uid?" sel":""),onclick:()=>{ S.renameUid=S.renameUid===a.uid?null:a.uid; delete S.draft.whoQ; delete S.draft.whoOtherName; render(); }},a.n||"(בלי שם עדיין)"))) : h("div",{class:"hint"},"עוד אף אחד"),
+    accts.length && !S.renameUid ? h("div",{class:"hint",style:"margin-top:4px"},"שם לא נכון (למשל רק שם משפחה)? לחץ עליו ובחר את השם הנכון.") : null,
+    S.renameUid ? h("div",{class:"aliasbox"},
+      h("div",{class:"hint"},`השם הנכון של "${nameOfUid(S.renameUid)||"בלי שם"}":`),
+      namePicker(n=>renameAccount(S.renameUid,n))) : null,
+    reg.length ? h("div",null,h("div",{class:"sub-h"},`⏳ נרשמו השבוע ועוד לא התחברו (${reg.length})`),h("div",{class:"chips"},reg.map(n=>h("span",{class:"chip"},n)))) : null);
+}
+
+async function renameAccount(uid, name){
+  name=clean(name); if(!name){ toast("כתוב שם"); return; }
+  S.renameUid=null; render();
+  await run(()=>setDoc(doc(db,"who",uid),{name, at:Date.now()}), `✔ השם עודכן ל${name}`);
+}
+
+function migrateNames(){
+  if(!S.isOwner || lsGet("namesMigrated") || !S.whoMap || !S.tokens || !S.phoneV) return;   // wait until all three lists loaded
+  const batch=writeBatch(db); let n=0;
+  const add=(uid,name)=>{ if(name && !S.whoMap[uid]){ S.whoMap[uid]=name; batch.set(doc(db,"who",uid),{name, at:Date.now()}); n++; } };
+  Object.entries(S.phoneNames).forEach(([uid,name])=>add(uid,name));
+  S.tokens.forEach(t=>add(t.uid,t.name));
+  if(!n){ lsSet("namesMigrated","1"); return; }
+  batch.commit().then(()=>lsSet("namesMigrated","1")).catch(e=>console.warn("migrate names",e));
+}
+
+// ---------- who has notifications on (owner) ----------
+function pushPeople(){
+  const toks=S.tokens||[], byUid=new Set(toks.map(t=>t.uid));
+  const nameOf=uid=>{ const t=toks.find(x=>x.uid===uid); const s=S.signups.find(x=>x.uid===uid && x.id===uid);
+    return (S.whoMap||{})[uid] || (s&&s.name) || (S.phoneNames||{})[uid] || (t&&t.name) || ""; };
+  const on=toks.map(t=>({uid:t.uid, name:nameOf(t.uid)})).sort((a,b)=>(a.name||"תתת").localeCompare(b.name||"תתת","he"));
+  const off=S.signups.filter(s=>s.uid && s.id===s.uid && !byUid.has(s.uid)).map(s=>s.name);
+  return {on, off};
+}
+function pushPeopleCard(){
+  const {on, off}=pushPeople(), named=on.filter(x=>x.name), anon=on.length-named.length;
+  return h("div",{class:"card"},
+    h("h2",null,"📲 מי מקבל התראות",h("span",{class:"count"},`${on.length}`)),
+    h("div",{class:"hint"},"מכשירים שהפעילו התראות באפליקציה. שם מופיע אחרי שהשחקן נרשם או שמר טלפון."),
+    h("div",{class:"sub-h"},`🔔 פעילות (${on.length})`),
+    named.length ? h("div",{class:"chips"},named.map(x=>h("span",{class:"chip on"},x.name))) : h("div",{class:"hint"},"עוד אף אחד"),
+    anon ? h("div",{class:"hint",style:"margin-top:6px"},`+ ${anon} מכשירים בלי שם (לא נרשמו עדיין)`) : null,
+    off.length ? h("div",null,
+      h("div",{class:"sub-h"},`🔕 רשומים השבוע בלי התראות (${off.length})`),
+      h("div",{class:"chips"},off.map(n=>h("span",{class:"chip"},n))),
+      h("div",{class:"hint",style:"margin-top:6px"},"אפשר לבקש מהם ללחוץ ״🔔 הפעל התראות״ בטאב רשימה. באייפון צריך קודם להוסיף את האתר למסך הבית.")) : null);
+}
+
+// ---------- notification log with ✓ / ✓✓ (owner) ----------
+const ERR_HE = {"registration-token-not-registered":"ההתראות כבויות או שהאפליקציה נמחקה","invalid-registration-token":"מכשיר לא תקין","third-party-auth-error":"שגיאה בשירות של אפל/גוגל","internal-error":"שגיאה זמנית","unavailable":"שגיאה זמנית"};
+function logStatus(l){
+  const acks=l.acks||{};
+  return (l.items||[]).map(it=>({...it, st: acks[it.k]?2 : it.ok===true?1 : it.ok===null?0 : -1, ackAt:acks[it.k]}));
+}
+function tick(st){
+  if(st===2) return h("span",{class:"tk tk2"},"✓✓");
+  if(st===1) return h("span",{class:"tk tk1"},"✓");
+  if(st===0) return h("span",{class:"tk tk0"},"🕓");
+  return h("span",{class:"tk tkx"},"✖");
+}
+function pushLogCard(){
+  const logs=S.pushLog||[];
+  return h("div",{class:"card"},
+    h("h2",null,"📨 יומן התראות"),
+    h("div",{class:"loglegend"},
+      h("div",null,tick(1)," נשלחה לטלפון"),
+      h("div",null,tick(2)," הגיעה לטלפון"),
+      h("div",null,tick(-1)," לא נשלחה")),
+    h("div",{class:"hint"},"לחץ על התראה כדי לראות מי."),
+    !logs.length ? h("div",{class:"hint",style:"margin-top:8px"},"עוד לא נשלחו התראות מאז העדכון.") : null,
+    logs.map(l=>{
+      const st=logStatus(l), c=[2,1,0,-1].map(x=>st.filter(i=>i.st===x).length), open=S.logOpen===l.id;
+      const un=l.unmatched||[];
+      return h("div",{class:"logrow"},
+        h("button",{class:"loghead",onclick:()=>{ S.logOpen=open?null:l.id; render(); }},
+          h("div",{class:"logt"},h("b",null,l.title||"התראה"),h("small",null,fmtFull(l.at))),
+          h("div",{class:"logc"},
+            c[0]?h("span",{class:"tk tk2"},`✓✓ ${c[0]}`):null,
+            c[1]?h("span",{class:"tk tk1"},`✓ ${c[1]}`):null,
+            c[2]?h("span",{class:"tk tk0"},`🕓 ${c[2]}`):null,
+            c[3]?h("span",{class:"tk tkx"},`✖ ${c[3]}`):null,
+            un.length?h("span",{class:"tk tkx"},`❓ ${un.length}`):null)),
+        open ? h("div",{class:"logbody"},
+          l.body ? h("div",{class:"hint"},l.body) : null,
+          st.slice().sort((a,b)=>a.st-b.st || String(a.name).localeCompare(String(b.name),"he")).map(i=>h("div",{class:"logp"},
+            tick(i.st), h("span",{class:"pn"},i.name),
+            h("small",null, i.st===2?`הגיעה ${new Date(i.ackAt).toTimeString().slice(0,5)}` : i.st===1?"נשלחה, הטלפון עוד לא אישר" : i.st===0?"בשליחה…" : (ERR_HE[i.ok]||"לא נשלחה")))),
+          un.length ? h("div",null,
+            h("div",{class:"sub-h"},`❓ קבועים שלא זוהו (${un.length})`),
+            h("div",{class:"hint"},"לא נמצא להם מכשיר עם התראות. אולי לא פתחו את האפליקציה מאז העדכון, או שהשם אצלם כתוב אחרת."),
+            h("div",{class:"chips"},un.map(n=>h("span",{class:"chip"},n)))) : null) : null);
+    }));
+}
+
+// ---------- "who are you?" so regulars get their notifications ----------
+// ---------- phone login: one account per player, on every device ----------
+const loggedIn = () => !!S.authPhone;
+const needLogin = () => !loggedIn() && !S.isAdmin;
+let recaptcha=null, confirmation=null;
+// a fresh container every time: reCAPTCHA can't be rendered twice into the same element (e.g. after a failed try)
+function freshCaptchaEl(id){
+  const old=document.getElementById(id); if(old) old.remove();
+  const el=document.createElement("div"); el.id=id; document.body.appendChild(el);   // outside the app, so render() keeps it
+  return el;
+}
+function resetRecaptcha(){ try{ recaptcha&&recaptcha.clear(); }catch(_){} recaptcha=null; }
+function recaptchaBox(){
+  if(!recaptcha) recaptcha=new RecaptchaVerifier(auth, freshCaptchaEl("recap"+Date.now()), {size:"invisible"});
+  return recaptcha;
+}
+const LOGIN_ERR = {"auth/error-code:-39":"גוגל חסמה זמנית את המספר הזה אחרי כמה ניסיונות. נסה שוב בעוד כמה שעות (ניסיון אחד בלבד)","auth/invalid-phone-number":"מספר הטלפון לא תקין","auth/too-many-requests":"יותר מדי ניסיונות. נסה שוב בעוד כמה דקות","auth/invalid-verification-code":"הקוד לא נכון","auth/code-expired":"הקוד פג תוקף, שלח קוד חדש","auth/operation-not-allowed":"התחברות בטלפון עוד לא הופעלה. דבר עם המארגן","auth/quota-exceeded":"נגמרה מכסת ההודעות להיום. נסה מחר","auth/missing-phone-number":"כתוב מספר טלפון"};
+function logLoginError(stage, e, ph){
+  try{
+    const code=String((e&&e.code)||"unknown").slice(0,80), msg=String((e&&e.message)||"").slice(0,300);
+    addDoc(collection(db,"loginErrors"),{stage, code, msg, ua:navigator.userAgent.slice(0,200), app:isStandalone()?"icon":"browser", ph:ph?String(ph).slice(-4):"", at:Date.now()}).catch(()=>{});
+  }catch(_){}
+}
+async function sendCode(){
+  const ph=normPhone(S.draft.loginPh ?? lsGet("myPhone"));
+  if(!ph){ toast("כתוב מספר טלפון תקין"); return; }
+  S.login={step:"phone", busy:true}; render();
+  try{
+    resetRecaptcha();
+    const v=recaptchaBox(), e164="+"+ph, u=auth.currentUser;
+    // a phone that already has an account (e.g. logged in from Safari before) signs in to it;
+    // a new phone is attached to this device's current account, so its sign-ups stay
+    let exists=false;
+    try{ const r=await httpsCallable(fns,"phoneStatus")({phone:ph}); exists=!!(r&&r.data&&r.data.exists); }catch(_){}
+    confirmation = (u && u.isAnonymous && !exists) ? await linkWithPhoneNumber(u, e164, v) : await signInWithPhoneNumber(auth, e164, v);
+    lsSet("myPhone",ph); S.login={step:"code", phone:ph}; render();
+    setTimeout(()=>{ const el=document.getElementById("f_code"); if(el) el.focus(); },50);
+  }catch(e){
+    console.warn("login",e); resetRecaptcha(); logLoginError("send", e, ph);
+    S.login={step:"phone", err:String((e&&(e.code||e.message))||"")}; toast(LOGIN_ERR[e&&e.code]||`לא הצלחתי לשלוח קוד (${String(e&&e.code||"").replace("auth/","")}). נסה שוב`); render();
+  }
+}
+async function sendCodeSignIn(){
+  const ph=S.login.phone || normPhone(lsGet("myPhone"));
+  resetRecaptcha();
+  try{ confirmation=await signInWithPhoneNumber(auth,"+"+ph,recaptchaBox()); S.login={step:"code", phone:ph}; delete S.draft.loginCode; render(); }
+  catch(e){ console.warn("resend",e); S.login={step:"phone", err:String(e&&e.code||"")}; render(); }
+}
+async function confirmCode(){
+  const code=String(S.draft.loginCode||"").replace(/\D/g,"");
+  if(code.length<6){ toast("כתוב את הקוד בן 6 הספרות"); return; }
+  if(S.login && S.login.busy) return;   // the code may arrive twice (auto-fill + button); confirm only once
+  S.login={...S.login, busy:true}; render();
+  try{
+    try{ await confirmation.confirm(code); }
+    catch(e){
+      // this phone already has an account (from another browser): enter it
+      if(e && e.code==="auth/credential-already-in-use"){
+        const c=PhoneAuthProvider.credentialFromError(e);
+        try{ await signInWithCredential(auth,c); }
+        catch(e2){ S.login={step:"phone"}; toast("נשלח קוד חדש, הזן אותו שוב"); render(); await sendCodeSignIn(); return; }
+      }
+      else throw e;
+    }
+    delete S.draft.loginCode;
+    S.authPhone = auth.currentUser && auth.currentUser.phoneNumber;
+    try{ await auth.currentUser.getIdToken(true); }catch(_){}
+    const name = await identifyMe();
+    if(name){ toast(`✔ מחובר. שלום ${name}!`); setTimeout(()=>location.reload(),900); }
+    else { S.login={step:"name"}; render(); }
+  }catch(e){ console.warn("confirm",e); logLoginError("confirm", e, S.login&&S.login.phone); S.login={...S.login, busy:false}; toast(LOGIN_ERR[e&&e.code]||"האימות נכשל, נסה שוב"); render(); }
+}
+// the server finds the player's name by his phone (organizer's contacts / earlier sign-ups)
+async function identifyMe(){
+  try{
+    const r=await httpsCallable(fns,"identify")({});
+    const name=r && r.data && r.data.name;
+    if(name){ lsSet("myName",name); lsSet("whoDone","1"); saveWho(name); render(); return name; }
+  }catch(e){ console.warn("identify",e); }
+  return null;
+}
+async function setAccountName(name){
+  name=clean(name); if(!name){ toast("כתוב את השם שלך"); return; }
+  lsSet("myName",name); lsSet("whoDone","1"); saveWho(name);
+  toast(`✔ שלום ${name}!`); setTimeout(()=>location.reload(),900);
+}
+function namePicker(onPick){
+  const hidden=new Set((S.cfg.hiddenNames||[]).map(norm)), seen=new Set(), names=[];
+  (S.cfg.priority||[]).concat(S.signups.filter(x=>!x.guestOf).map(x=>x.name), S.isAdmin?knownNames():[]).forEach(n=>{ const k=norm(n); if(n && !hidden.has(k) && !seen.has(k)){ seen.add(k); names.push(n); } });
+  names.sort((a,b)=>a.localeCompare(b,"he"));
+  const q=norm(S.draft.whoQ||""), shown=q?names.filter(n=>norm(n).includes(q)):names;
+  return h("div",null,
+    names.length>12 ? h("input",{id:"f_whoQ",type:"text",class:"phone-in",placeholder:"🔍 חפש את השם שלך",value:S.draft.whoQ||"",oninput:e=>{ S.draft.whoQ=e.target.value; render(); const el=document.getElementById("f_whoQ"); if(el){ el.focus(); el.setSelectionRange(el.value.length,el.value.length); } }}) : null,
+    h("div",{class:"chips",style:"margin-top:10px"},shown.map(n=>h("button",{class:"chip",onclick:()=>onPick(n)},n))),
+    h("div",{class:"addrow",style:"margin-top:10px"},
+      h("input",{id:"f_whoOther",type:"text",placeholder:"לא ברשימה? כתוב שם ושם משפחה",value:S.draft.whoOtherName||"",oninput:e=>{S.draft.whoOtherName=e.target.value;}}),
+      h("button",{class:"btn",onclick:()=>onPick(S.draft.whoOtherName||"")},"שמור")));
+}
+function loginCard(reason){
+  if(S.isAdmin) return null;
+  if(loggedIn() && lsGet("myName")) return null;
+  const L=S.login||{step:"phone"};
+  if(loggedIn() || L.step==="name") return h("div",{class:"card surv login"},
+    h("h2",null,"👋 איך קוראים לך?"),
+    h("div",{class:"hint"},"בחר את השם שלך כמו שהוא מופיע בקבוצה. זה נעשה פעם אחת."),
+    namePicker(setAccountName));
+  return h("div",{class:"card surv login"},
+    h("h2",null,"🔐 התחברות עם הטלפון"),
+    h("div",{class:"hint"}, reason || "פעם אחת, ואז האפליקציה מזהה אותך מכל מכשיר: בהרשמה, בהצבעות ובהתראות."),
+    L.step==="code"
+      ? h("div",null,
+          h("div",{class:"hint"},`שלחנו קוד ב-SMS ל-${prettyPhone(L.phone)}`),
+          h("div",{class:"addrow"},
+            h("input",{id:"f_code",type:"text",inputmode:"numeric",autocomplete:"one-time-code",dir:"ltr",placeholder:"קוד בן 6 ספרות",maxlength:"6",value:S.draft.loginCode||"",oninput:e=>{ S.draft.loginCode=e.target.value; if(e.target.value.replace(/\D/g,"").length===6) confirmCode(); }}),
+            h("button",{class:"btn",disabled:!!L.busy,onclick:confirmCode},L.busy?"…":"אישור")),
+          h("button",{class:"linkbtn muted",onclick:()=>{ S.login={step:"phone"}; render(); }},"שנה מספר / שלח שוב"))
+      : h("div",{class:"addrow"},
+          h("input",{id:"f_loginPh",type:"tel",inputmode:"tel",autocomplete:"tel",dir:"ltr",placeholder:"050-0000000",value:S.draft.loginPh ?? prettyPhone(lsGet("myPhone")),oninput:e=>{S.draft.loginPh=e.target.value;},onkeydown:e=>{ if(e.key==="Enter") sendCode(); }}),
+          h("button",{class:"btn",disabled:!!L.busy,onclick:sendCode},L.busy?"…":"שלח קוד")),
+    L.err ? h("div",{class:"hint",style:"direction:ltr;text-align:left;font-size:11px;opacity:.7"},L.err) : null,
+    L.step!=="code" ? h("button",{class:"linkbtn muted",onclick:()=>{ S.loginLater=true; render(); }},"אחר כך") : null);
+}
+function loginNeededToast(){ toast("קודם התחבר עם הטלפון (למעלה)"); S.loginLater=false; S.tab="list"; render(); window.scrollTo({top:0,behavior:"smooth"}); }
+
+// every device says once who it is, so votes/notifications from Safari, WhatsApp or the home-screen app all have a name
+function saveWho(name){
+  name=clean(name); if(!name || !S.uid) return;
+  if(lsGet("whoSaved")===S.uid+"|"+name) return;
+  setDoc(doc(db,"who",S.uid),{name, at:Date.now()}).then(()=>lsSet("whoSaved",S.uid+"|"+name)).catch(e=>console.warn("who",e));
+}
+// ---------- organizers: attach their phone to the Google account ----------
+// The phone is verified by SMS in a separate, temporary session; the server then puts it on the organizer's account,
+// so one account is both "organizer" (via Google) and "player" (name on the list, sign-ups, votes).
+let proofAuth=null, proofCaptcha=null, proofConf=null;
+function proofSession(){
+  if(!proofAuth) proofAuth=getAuth(initializeApp(firebaseConfig,"phoneproof"));
+  if(!proofCaptcha) proofCaptcha=new RecaptchaVerifier(proofAuth, freshCaptchaEl("recap2_"+Date.now()), {size:"invisible"});
+  return proofAuth;
+}
+async function adminSendCode(){
+  const ph=normPhone(S.draft.admPh ?? lsGet("myPhone"));
+  if(!ph){ toast("כתוב מספר טלפון תקין"); return; }
+  S.admLink={step:"phone", busy:true}; render();
+  try{
+    try{ proofCaptcha&&proofCaptcha.clear(); }catch(_){} proofCaptcha=null;
+    const a=proofSession();
+    proofConf=await signInWithPhoneNumber(a,"+"+ph,proofCaptcha);
+    lsSet("myPhone",ph); S.admLink={step:"code", phone:ph}; render();
+  }catch(e){ console.warn("adm phone",e); try{ proofCaptcha&&proofCaptcha.clear(); }catch(_){} proofCaptcha=null; S.admLink={step:"phone", err:String(e&&e.code||"")}; toast(LOGIN_ERR[e&&e.code]||"לא הצלחתי לשלוח קוד"); render(); }
+}
+async function adminConfirmCode(){
+  const code=String(S.draft.admCode||"").replace(/\D/g,"");
+  if(code.length<6){ toast("כתוב את הקוד בן 6 הספרות"); return; }
+  if(S.admLink && S.admLink.busy) return;
+  S.admLink={...S.admLink, busy:true}; render();
+  try{
+    const cred=await proofConf.confirm(code);
+    const proof=await cred.user.getIdToken();
+    const r=await httpsCallable(fns,"adoptPhone")({proof});
+    try{ await signOut(proofAuth); }catch(_){}
+    const name=r&&r.data&&r.data.name;
+    if(name){ lsSet("myName",name); saveWho(name); }
+    await auth.currentUser.getIdToken(true);
+    toast(name?`✔ הטלפון חובר. שלום ${name}!`:"✔ הטלפון חובר"); setTimeout(()=>location.reload(),900);
+  }catch(e){ console.warn("adm confirm",e); S.admLink={...S.admLink, busy:false}; toast(LOGIN_ERR[e&&e.code]||"החיבור נכשל, נסה שוב"); render(); }
+}
+function adminPhoneCard(){
+  if(!S.isAdmin || loggedIn()) return null;
+  const L=S.admLink||{step:"phone"};
+  return h("div",{class:"card surv login"},
+    h("h2",null,"📱 חבר את הטלפון שלך"),
+    h("div",{class:"hint"},"פעם אחת: ככה האפליקציה יודעת מי אתה ברשימה, ואתה נרשם, מצביע ומדרג בשמך. הכניסה כמנהל נשארת עם גוגל."),
+    L.step==="code"
+      ? h("div",null,
+          h("div",{class:"hint"},`שלחנו קוד ב-SMS ל-${prettyPhone(L.phone)}`),
+          h("div",{class:"addrow"},
+            h("input",{id:"f_admCode",type:"text",inputmode:"numeric",autocomplete:"one-time-code",dir:"ltr",placeholder:"קוד בן 6 ספרות",maxlength:"6",value:S.draft.admCode||"",oninput:e=>{ S.draft.admCode=e.target.value; if(e.target.value.replace(/\D/g,"").length===6) adminConfirmCode(); }}),
+            h("button",{class:"btn",disabled:!!L.busy,onclick:adminConfirmCode},L.busy?"…":"אישור")),
+          h("button",{class:"linkbtn muted",onclick:()=>{ S.admLink={step:"phone"}; render(); }},"שנה מספר / שלח שוב"))
+      : h("div",{class:"addrow"},
+          h("input",{id:"f_admPh",type:"tel",inputmode:"tel",dir:"ltr",placeholder:"050-0000000",value:S.draft.admPh ?? prettyPhone(lsGet("myPhone")),oninput:e=>{S.draft.admPh=e.target.value;}}),
+          h("button",{class:"btn",disabled:!!L.busy,onclick:adminSendCode},L.busy?"…":"שלח קוד")),
+    L.err ? h("div",{class:"hint",style:"direction:ltr;text-align:left;font-size:11px;opacity:.7"},L.err) : null,
+    L.step!=="code" ? h("button",{class:"linkbtn muted",onclick:()=>{ S.admLinkLater=true; render(); }},"אחר כך") : null);
+}
+
+// the "who are you / log in" card at the top of the list (and of the teams tab during a vote)
+function whoCard(){
+  if(S.isAdmin) return S.admLinkLater ? null : adminPhoneCard();
+  if(!S.isAdmin && S.cfgLoaded && S.uid && !S.surveyOpenUI && (!loggedIn() || !lsGet("myName")) && !S.loginLater) return loginCard();
+  return null;
+}
+
+// ---------- render ----------
+function render(){
+  const cap=S.cfg.capacity, n=S.signups.length, inN=Math.min(n,cap), wN=Math.max(0,n-cap), open=isOpen();
+  $("hdr").replaceChildren(
+    h("h1",null,"⚽ כדורגל שבועי"),
+    h("div",{class:"sub"}, gameLine() || (!open ? "ההרשמה סגורה כרגע" : inN>=cap ? "הרשימה מלאה, אפשר להירשם להמתנה" : `נשארו ${cap-inN} מקומות`)),
+    h("div",{class:"stats"},
+      h("div",{class:"stat"},h("b",null,`${inN}/${cap}`),h("span",null,"רשומים")),
+      h("div",{class:"stat"},h("b",null,wN),h("span",null,"בהמתנה")),
+      h("div",{class:"stat"},h("b",null,open?"פתוח":isPrioOpen()?"קבועים":"סגור"),h("span",null,"הרשמה"))),
+    h("div",{class:"bar"},h("i",{style:`width:${cap?Math.min(100,inN/cap*100):0}%`})));
+
+  const voting = S.teams && S.teams.status==="voting";
+  const tabs=[["list","רשימה"],["teams", voting && !S.isAdmin ? "כוחות 🗳️" : "כוחות"],["stats","טבלה"],["timer","טיימר"]];
+  if(S.isAdmin) tabs.push(["settings","הגדרות"],["players","שחקנים"]);
+  if(!tabs.find(t=>t[0]===S.tab)) S.tab="list";
+  $("tabs").replaceChildren(...tabs.map(([k,l])=>h("button",{class:S.tab===k?"on":"",onclick:()=>{S.tab=k;S.copyText=null;S.confirmReset=false;render();}},l)));
+
+  const m=$("main");
+  if(S.loading){ m.replaceChildren(h("div",{class:"loading"},"טוען…")); return; }
+  const ae=document.activeElement, keepId=ae&&ae.id, val=ae&&ae.value;
+  const views={list:viewList,teams:viewTeams,timer:viewTimer,stats:viewStats,players:viewPlayers,settings:viewSettings};
+  m.replaceChildren(...[].concat(views[S.tab]()).flat().filter(Boolean), footer());
+  if(keepId && $(keepId)){ const el=$(keepId); if(el.tagName==="INPUT" && el.type==="text") el.value=val; el.focus(); }
+  if($("cd")) startCountdown();
+}
+
+async function organizerLogin(pick){
+  const p=new GoogleAuthProvider();
+  if(pick) p.setCustomParameters({prompt:"select_account"});   // let Google show the account chooser
+  try{ await signInWithPopup(auth,p); }
+  catch(e){ if(e.code!=="auth/popup-closed-by-user" && e.code!=="auth/cancelled-popup-request") toast("ההתחברות נכשלה. נסה לפתוח את הקישור בדפדפן (Safari/Chrome)"); }
+}
+function footer(){
+  // only on the main admin's own device(s): choose which Google account to enter with
+  const ownerDev = !!lsGet("ownerDevice");
+  return h("div",{class:"foot"},
+    S.isAdmin
+      ? h("button",{class:"linkbtn",onclick:async()=>{ await signOut(auth); }},"🔓 יציאה ממצב מארגן")
+      : h("button",{class:"linkbtn muted",onclick:()=>organizerLogin(ownerDev)},"כניסת מארגן"),
+    ownerDev && S.isAdmin
+      ? h("button",{class:"linkbtn muted",style:"display:block;margin:0 auto",onclick:()=>organizerLogin(true)},"🔄 החלף חשבון")
+      : null);
+}
+
+function navRow(){
+  const g=game(); if(!g.place) return null;
+  const q=encodeURIComponent(g.place);
+  return h("div",{class:"navrow"},
+    h("span",null,`📍 ${g.place}`),
+    h("a",{href:`https://waze.com/ul?q=${q}&navigate=yes`,target:"_blank",rel:"noopener"},"🧭 Waze"),
+    h("a",{href:`https://www.google.com/maps/search/?api=1&query=${q}`,target:"_blank",rel:"noopener"},"🗺️ מפות"));
+}
+
+function payLinkBtn(link, label){
+  if(!link) return null;
+  if(/^https?:\/\//i.test(link)) return h("a",{class:"btn full pay",href:link,target:"_blank",rel:"noopener"},label||"💳 לתשלום בביט / פייבוקס");
+  const ph=normPhone(link);
+  return h("div",{class:"paylinktxt"},"לתשלום: ",h("b",{dir:"ltr"},ph?prettyPhone(ph):link),
+    h("button",{class:"linkbtn",onclick:()=>copy(ph?prettyPhone(ph):link)},"📋 העתק"));
+}
+function payStatusList(canEdit){
+  const act=activeList(), payer=S.pay&&S.pay.payer;
+  return h("div",{class:"paylist"}, act.map(s=>{
+    const mk=payMark(s.id), isPayer=payer&&payer.id===s.id;
+    return h("div",{class:"payrow"+(mk?" ok":"")},
+      h("span",{class:"pn"},s.name),
+      h("span",{class:"ps"}, mk ? `${PAY_ICON[mk.m]||"✅"} ${PAY_TXT[mk.m]||"שילם"}` : "⏳ עוד לא"),
+      canEdit && !isPayer ? h("button",{class:mk?"ic x":"btn ghost paymark",title:mk?"בטל סימון":"סמן ששילם",onclick:()=>setMark(s.id, mk?null:"admin")}, mk?"↩":"✔ שילם") : h("span",{style:"width:32px"}));
+  }));
+}
+function payCard(){
+  const act=activeList(), me=mySignup(), inGame=me && act.includes(me), g=myGuest(), guestIn=g && act.includes(g);
+  const price=payPrice();
+  // no payment request yet
+  if(!payActive()){
+    if(!inGame && !S.isAdmin) return null;
+    if(!S.payForm) return h("div",{class:"card paycard slim"},
+      h("button",{class:"btn ghost full",onclick:()=>{S.payForm=true;render();}},"🏟️ שילמתי על המגרש, לבקש כסף מכולם"));
+    return h("div",{class:"card paycard"},
+      h("h2",null,"🏟️ שילמתי על המגרש"),
+      h("div",{class:"hint"},"כל מי שברשימה יקבל התראה עם הקישור שלך. מי שבהמתנה לא יקבל."),
+      h("label",{class:"field"},h("span",null,"כמה כל שחקן מעביר? (₪)"),
+        h("input",{id:"f_payPrice",type:"number",inputmode:"numeric",value:S.draft.payPrice ?? (price||""),placeholder:"25",oninput:e=>{S.draft.payPrice=e.target.value;}})),
+      h("label",{class:"field"},h("span",null,"קישור לביט / פייבוקס, או מספר טלפון"),
+        h("input",{id:"f_payLink2",type:"text",dir:"ltr",value:S.draft.payLink2 ?? "",placeholder:"https://... או 050-0000000",oninput:e=>{S.draft.payLink2=e.target.value;}})),
+      h("div",{class:"hint",style:"margin-top:4px"},"בביט: ״בקשת תשלום״ ← ״שיתוף קישור״, ומדביקים כאן."),
+      h("div",{class:"share"},
+        h("button",{class:"btn ghost",onclick:()=>{S.payForm=false;render();}},"ביטול"),
+        h("button",{class:"btn",onclick:startPayment},"📣 שלח לכולם")));
+  }
+  const payer=S.pay.payer, n=act.filter(s=>payMark(s.id)).length;
+  // the payer (or organizer) manages
+  if(iAmPayer() || S.isAdmin){
+    return h("div",{class:"card paycard"},
+      h("h2",null, iAmPayer()?"🏟️ אתה שילמת על המגרש":`🏟️ ${payer.name} שילם על המגרש`, h("span",{class:"count"},`${n}/${act.length} שילמו`)),
+      h("div",{class:"hint"},`${price}₪ לשחקן · נאסף ${n*price}₪ מתוך ${act.length*price}₪`),
+      h("div",{class:"hint",style:"margin-top:4px"},"מישהו העביר ושכח לסמן? לחץ ״✔ שילם״ ליד השם שלו."),
+      payStatusList(true),
+      n<act.length ? h("div",{class:"share",style:"margin-top:10px"},
+        h("button",{class:"btn",onclick:remindUnpaid},"📣 תזכורת בהתראה"),
+        h("a",{class:"btn wa",href:waHref(payRemindText()),target:"_blank",rel:"noopener"},"תזכורת בוואטסאפ")) : h("div",{class:"paid-ok",style:"margin-top:10px"},"🎉 כולם שילמו!"),
+      h("button",{class:"linkbtn muted",onclick:()=>{ if(!S.confirmPayCancel){ S.confirmPayCancel=true; render(); setTimeout(()=>{S.confirmPayCancel=false;render();},4000); return; } S.confirmPayCancel=false; cancelPayment(); }}, S.confirmPayCancel?"בטוח? לחץ שוב":"בטל בקשת תשלום"));
+  }
+  if(!inGame && !guestIn) return h("div",{class:"card paycard slim"},h("div",{class:"hint"},`💳 ${payer.name} שילם על המגרש השבוע (${price}₪ לשחקן).`));
+  const mine=[me,g].filter(x=>x && act.includes(x));
+  return h("div",{class:"card paycard"},
+    h("h2",null,`💳 תשלום ל${payer.name}`),
+    h("div",{class:"hint"},`${payer.name} שילם על המגרש. כל שחקן מעביר לו ${price}₪.`),
+    mine.map(x=>{ const mk=payMark(x.id), who=x===me?"":` (האורח שלך ${x.name})`;
+      const SELF={bit:"שילמת בביט",cash:"הבאת מזומן",admin:"סומן ששילמת",payer:"שילמת על המגרש"};
+      if(mk) return h("div",{class:"paid-ok",style:"margin-top:8px"},`${PAY_ICON[mk.m]||"✅"} ${x===me?(SELF[mk.m]||"שילמת"):(PAY_TXT[mk.m]||"שילם")}${who}`,
+        mk.m!=="admin" && mk.m!=="payer" ? h("button",{class:"linkbtn",onclick:()=>setMark(x.id,null)},"בטל") : null);
+      return h("div",{class:"paybox"},
+        x===me ? payLinkBtn(S.pay.link) : h("div",{class:"hint"},`גם עבור האורח שלך, ${x.name}:`),
+        h("div",{class:"share"},
+          h("button",{class:"btn ghost",onclick:()=>setMark(x.id,"bit").then(ok=>ok&&toast(`עדכנו את ${payer.name} ששילמת ✔`))},"✔ שילמתי בביט"),
+          h("button",{class:"btn ghost",onclick:()=>setMark(x.id,"cash").then(ok=>ok&&toast(`עדכנו את ${payer.name} שהבאת מזומן 💵`))},"💵 העברתי מזומן")));
+    }));
+}
+
+// ---------- last week's payment, still open after a new list started ----------
+const prevMark = id => (S.prevMarks||{})[id] || null;
+function iAmPrevPayer(){ const p=S.prevPay&&S.prevPay.payer; return !!(p && (p.uid===S.uid || (loggedIn() && lsGet("myName") && norm(p.name)===norm(lsGet("myName"))))); }
+function myPrevRows(){
+  const P=S.prevPay; if(!P) return [];
+  const me=norm(lsGet("myName"));
+  return Object.entries(P.players||{}).filter(([id,x])=>(x.uid && x.uid===S.uid) || (!x.guestOf && loggedIn() && me && norm(x.name)===me) || (x.guestOf && x.uid===S.uid)).map(([id,x])=>({id,...x}));
+}
+async function setPrevMark(id, m){
+  const ref=doc(db,"prevMarks",id);
+  if(!m) return run(()=>deleteDoc(ref),"הסימון בוטל");
+  return run(()=>setDoc(ref,{m, by:S.uid||"", at:Date.now()}));
+}
+async function closePrevPay(){
+  if(!confirm("לסגור את התשלום משבוע שעבר?")) return;
+  const batch=writeBatch(db);
+  Object.keys(S.prevMarks||{}).forEach(id=>batch.delete(doc(db,"prevMarks",id)));
+  batch.delete(prevPayRef);
+  await run(()=>batch.commit(),"התשלום משבוע שעבר נסגר");
+}
+function prevPayCard(){
+  const P=S.prevPay; if(!P || !P.payer) return null;
+  const rows=Object.entries(P.players||{}).map(([id,x])=>({id,...x})).filter(x=>x.id!==P.payer.id);
+  const paid=rows.filter(x=>prevMark(x.id)).length, price=P.price||0;
+  if(iAmPrevPayer() || S.isAdmin){
+    return h("div",{class:"card paycard"},
+      h("h2",null,`💳 תשלום משבוע שעבר`+(iAmPrevPayer()?"":` · ל${P.payer.name}`),h("span",{class:"count"},`${paid}/${rows.length} שילמו`)),
+      h("div",{class:"hint"},`${price}₪ לשחקן · עוד לא שילמו: ${rows.length-paid}. מישהו העביר ושכח לסמן? לחץ ״✔ שילם״.`),
+      h("div",{class:"paylist"},rows.sort((a,b)=>(!!prevMark(a.id))-(!!prevMark(b.id))).map(x=>{ const mk=prevMark(x.id);
+        return h("div",{class:"payrow"+(mk?" ok":"")},
+          h("span",{class:"pn"},x.name),
+          h("span",{class:"ps"}, mk?`${PAY_ICON[mk.m]||"✅"} ${PAY_TXT[mk.m]||"שילם"}`:"⏳ עוד לא"),
+          h("button",{class:mk?"ic x":"btn ghost paymark",onclick:()=>setPrevMark(x.id, mk?null:"admin")}, mk?"↩":"✔ שילם")); })),
+      paid>=rows.length ? h("div",{class:"paid-ok",style:"margin-top:10px"},"🎉 כולם שילמו!") : null,
+      h("button",{class:"linkbtn muted",onclick:closePrevPay}, paid>=rows.length?"סגור":"סגור את התשלום הזה"));
+  }
+  const mine=myPrevRows().filter(x=>x.id!==P.payer.id);
+  if(!mine.length) return null;
+  const open=mine.filter(x=>!prevMark(x.id));
+  if(!open.length) return null;   // already paid: nothing to show
+  return h("div",{class:"card paycard"},
+    h("h2",null,`💳 תשלום משבוע שעבר ל${P.payer.name}`),
+    h("div",{class:"hint"},`${P.payer.name} שילם על המגרש בשבוע שעבר. כל שחקן מעביר לו ${price}₪.`),
+    open.map(x=>h("div",{class:"paybox"},
+      x.guestOf ? h("div",{class:"hint"},`עבור האורח שלך, ${x.name}:`) : payLinkBtn(P.link),
+      h("div",{class:"share"},
+        h("button",{class:"btn ghost",onclick:()=>setPrevMark(x.id,"bit").then(ok=>ok&&toast(`עדכנו את ${P.payer.name} ששילמת ✔`))},"✔ שילמתי בביט"),
+        h("button",{class:"btn ghost",onclick:()=>setPrevMark(x.id,"cash").then(ok=>ok&&toast(`עדכנו את ${P.payer.name} שהבאת מזומן 💵`))},"💵 העברתי מזומן")))));
+}
+
+function promoCards(){
+  if(!S.isAdmin || !S.promoted.length) return [];
+  return S.promoted.map(p=>{
+    const su=S.signups.find(s=>s.id===p.id), host=su&&su.guestOf?S.signups.find(s=>s.id===su.guestOf):null;
+    const ph=phoneOf(host||su);
+    const text=host?`${host.name}, האורח שלך ${p.name} נכנס לכדורגל! ⚽`+(gameLine()?`\n${gameLine()}`:""):promoText(p.name);
+    const href=ph?`https://wa.me/${ph}?text=${encodeURIComponent(text)}`:waHref(text);
+    return h("div",{class:"card promo"},
+      h("div",{class:"promoh"},h("b",null,`⬆️ ${p.name} עלה מההמתנה`),h("button",{class:"ic x",title:"סגור",onclick:()=>dismissPromo(p.id)},"×")),
+      h("div",{class:"hint"}, ph ? `ההודעה תיפתח ישר בצ'אט עם ${host?host.name:p.name} (${prettyPhone(ph)}):` : "אין לו טלפון שמור, תבחר את הצ'אט בוואטסאפ:"),
+      h("a",{class:"btn wa full",href,target:"_blank",rel:"noopener",onclick:()=>setTimeout(()=>dismissPromo(p.id),500)}, ph?`שלח ל${host?host.name:p.name} בוואטסאפ`:"שלח לו הודעה בוואטסאפ"));
+  });
+}
+
+function myCard(){
+  const me=mySignup(), cap=S.cfg.capacity;
+  if(me){
+    const i=S.signups.indexOf(me), inGame=i<cap;
+    return h("div",{class:"card me "+(inGame?"in":"waiting")},
+      h("div",{class:"mebig"}, inGame ? "✅ אתה ברשימה!" : "⏳ אתה ברשימת המתנה"),
+      h("div",{class:"mesub"}, inGame ? `${me.name} · מקום ${i+1} מתוך ${cap}` : `${me.name} · מקום ${i-cap+1} בהמתנה. אם מישהו יבטל תעלה אוטומטית.`),
+      guestBox(),
+      pushBox(),
+      cancelLocked()
+        ? h("div",{class:"locked"},`🔒 פחות מ-${S.cfg.lockHours} שעות למשחק, אי אפשר לבטל לבד. אם אתה לא מגיע, דבר עם המארגן.`)
+        : h("button",{class:"btn warn full",style:"margin-top:12px",onclick:()=>{
+            if(!S.confirmCancel){ S.confirmCancel=true; render(); setTimeout(()=>{S.confirmCancel=false;render();},4000); return; }
+            S.confirmCancel=false; selfCancel();
+          }}, S.confirmCancel ? "בטוח? לחץ שוב לביטול" : "לא מגיע, בטל הרשמה"));
+  }
+  if(!isOpen() && isPrioOpen()){
+    const regular=isPrio(lsGet("myName"));
+    S.prioBanner = h("div",{class:"prionote"}, regular
+      ? "🎟️ אתה ברשימת הקבועים, ההרשמה פתוחה לך עכשיו!"
+      : `🎟️ כרגע ההרשמה פתוחה רק לקבועים.`+(S.cfg.openAt?` לכולם: ${fmtFull(S.cfg.openAt)}`:""));
+  } else S.prioBanner=null;
+  if(!isOpen() && !isPrioOpen()){
+    const pa=prioAt();
+    if(pa && pa>Date.now() && isPrio(lsGet("myName")))
+      return h("div",{class:"card countdown"},
+        h("div",{class:"hint"},"🎟️ בתור קבוע, ההרשמה תיפתח לך "+fmtFull(pa)),
+        h("div",{class:"cdbig",id:"cd","data-target":String(pa)},fmtLeft(pa-Date.now())),
+        h("div",{class:"hint"},`לשאר השחקנים: ${fmtFull(S.cfg.openAt)}`),
+        pushBox());
+    if(S.cfg.openAt && S.cfg.openAt>Date.now())
+      return h("div",{class:"card countdown"},
+        h("div",{class:"hint"},"🔒 ההרשמה תיפתח "+fmtFull(S.cfg.openAt)),
+        h("div",{class:"cdbig",id:"cd","data-target":String(S.cfg.openAt)},fmtLeft(S.cfg.openAt-Date.now())),
+        h("div",{class:"hint"},"השאר את הדף פתוח, והכפתור יופיע ברגע שההרשמה תיפתח."),
+        pa && pa>Date.now() ? h("div",{class:"hint"},`🎟️ לקבועים ההרשמה נפתחת קודם: ${fmtFull(pa)}`) : null,
+        pushBox());
+    return h("div",{class:"card"},h("div",{class:"empty"},"🔒 ההרשמה סגורה כרגע. היא תיפתח בקרוב."),pushBox());
+  }
+  const full=S.signups.length>=cap;
+  if(!loggedIn() || !lsGet("myName")) return h("div",{class:"card reg"},h("h2",null,"✋ הרשמה למשחק"),S.prioBanner,
+    h("div",{class:"hint"},"🔐 כדי להירשם צריך להתחבר פעם אחת עם הטלפון."),
+    S.loginLater ? h("button",{class:"btn full",style:"margin-top:8px",onclick:()=>{ S.loginLater=false; render(); window.scrollTo({top:0,behavior:"smooth"}); }},"התחבר עכשיו") : null,
+    pushBox());
+  return h("div",{class:"card reg"},
+    h("h2",null, full ? "⏳ הרשמה לרשימת המתנה" : "✋ הרשמה למשחק"),
+    S.prioBanner,
+    h("button",{class:"btn full big",disabled:S.busy,onclick:()=>selfRegister(lsGet("myName"))}, S.busy?"…":`אני בא! (${lsGet("myName")})`),
+    h("div",{class:"hint",style:"margin-top:8px"},"כל הקודם זוכה. אפשר לבטל מכל מכשיר שאתה מחובר בו."),
+    pushBox());
+  return null;
+}
+
+function guestBox(){
+  if(S.cfg.allowGuests===false) return null;
+  const g=myGuest(), cap=S.cfg.capacity;
+  if(g){
+    const i=S.signups.indexOf(g);
+    return h("div",{class:"guest"},
+      h("span",null,`👤 האורח שלך: `,h("b",null,g.name),` · `+(i<cap?`מקום ${i+1}`:`מקום ${i-cap+1} בהמתנה`)),
+      cancelLocked()?null:h("button",{class:"linkbtn",onclick:()=>{
+        if(!S.confirmGuest){ S.confirmGuest=true; render(); setTimeout(()=>{S.confirmGuest=false;render();},4000); return; }
+        S.confirmGuest=false; cancelGuest(); }}, S.confirmGuest?"בטוח?":"הסר אורח"));
+  }
+  if(!isOpen()) return null;
+  if(!S.showGuest) return h("button",{class:"linkbtn",onclick:()=>{S.showGuest=true;render();}},"➕ מביא חבר? הוסף אורח");
+  const inp=h("input",{id:"guestName",type:"text",placeholder:"שם האורח",autocomplete:"off",onkeydown:e=>{ if(e.key==="Enter") addGuest(e.target.value); }});
+  return h("div",{class:"guest"},
+    h("div",{class:"addrow"},inp,h("button",{class:"btn",onclick:()=>addGuest(inp.value)},"הוסף")),
+    h("div",{class:"hint",style:"margin-top:4px"},"האורח נכנס במקום הפנוי הבא (או להמתנה). אפשר אורח אחד לכל שחקן."));
+}
+
+function rowFor(s,i,isWait){
+  const pos=isWait?i-S.cfg.capacity+1:i+1, mine=s.uid===S.uid&&s.id===S.uid;
+  const showPay=payActive() && !isWait, mk=payMark(s.id), paid=!!mk;
+  return h("li",{class:"row"+(isWait?" wait":"")+(mine?" mine":"")},
+    h("div",{class:"num"},pos),
+    h("div",{class:"nm"},h("b",null,s.name+(mine?" (אתה)":"")+(showPay&&paid?` ${PAY_ICON[mk.m]||"✅"}`:"")),h("small",null,(s.guestOf?`👤 אורח של ${(S.signups.find(x=>x.id===s.guestOf)||{name:"שחקן"}).name} · `:"")+"נרשם "+fmtTime(s.ts))),
+    S.isAdmin ? h("div",{class:"ctl"},
+      showPay ? h("button",{class:"ic pay"+(paid?" on":""),title:paid?"שילם":"לא שילם",onclick:()=>togglePaid(s.id)},"💰") : null,
+      h("button",{class:"ic",title:"למעלה",disabled:i===0,onclick:()=>adminMove(i,-1)},"▲"),
+      h("button",{class:"ic",title:"למטה",disabled:i===S.signups.length-1,onclick:()=>adminMove(i,1)},"▼"),
+      h("button",{class:"ic x",title:"הסר",onclick:()=>adminRemove(s)},"×")) : null);
+}
+
+function viewList(){
+  const cap=S.cfg.capacity, out=[];
+  if(S.error) out.push(h("div",{class:"note"},S.error));
+  out.push(...promoCards());
+  out.push(whoCard());
+  out.push(surveyCard());
+  if(S.teams && S.teams.status==="voting" && !S.isAdmin)
+    out.push(h("button",{class:"card votecall",onclick:()=>{S.tab="teams";render();}},
+      h("b",null,"🗳️ יש הצבעה על הכוחות!"), h("span",null, myVote()==null ? "לחץ כאן כדי להצביע" : `הצבעת ל${OPT_NAMES[myVote()]} · לחץ לצפייה`)));
+  if(mvpIsOpen() && !S.isAdmin)
+    out.push(h("button",{class:"card votecall mvpcall",onclick:()=>{S.tab="teams";render();}},
+      h("b",null,"⭐ מי ה-MVP של הערב?"), h("span",null, myMvpVote() ? `הצבעת ל${myMvpVote()} · לחץ לשינוי` : "לחץ כאן כדי להצביע")));
+  out.push(myCard());
+  out.push(prevPayCard());
+  if(payActive()) out.push(payCard());   // an open payment request stays on top
+  out.push(installCard());
+  if(S.isAdmin){
+    const inp=h("input",{id:"addName",type:"text",placeholder:"הוספת שחקן ידנית",autocomplete:"off",
+      onkeydown:e=>{ if(e.key==="Enter"){ adminAdd([e.target.value]); e.target.value=""; } }});
+    const signed=new Set(S.signups.map(s=>norm(s.name)));
+    const regulars=S.ratings.map(r=>r.n).filter(n=>!signed.has(norm(n))).sort((a,b)=>a.localeCompare(b,"he"));
+    // collapsed by default: a quick-actions button for organizers
+    if(!lsGet("adminOpen")) out.push(h("button",{class:"card admin adminbar",onclick:()=>{ lsSet("adminOpen","1"); render(); }},
+      h("span",null,"🛠️ קיצורי דרך למנהל"), h("small",null,"הוספת שחקנים · הדבקה מוואטסאפ · קישור להרשמה ▾")));
+    else out.push(h("div",{class:"card admin"},
+      h("h2",{class:"tile-head",style:"cursor:pointer",onclick:()=>{ try{ localStorage.removeItem("adminOpen"); }catch(e){} S.showPaste=false; render(); }},"🛠️ קיצורי דרך למנהל",h("span",{class:"chev"},"▲")),
+      h("div",{class:"addrow"},inp,h("button",{class:"btn",onclick:()=>{adminAdd([inp.value]);inp.value="";}},"הוסף")),
+      regulars.length ? h("div",{class:"chips"},regulars.map(n=>h("button",{class:"chip",onclick:()=>adminAdd([n])},n))) : null,
+      h("button",{class:"linkbtn",onclick:()=>{S.showPaste=!S.showPaste;render();}},S.showPaste?"סגור":"📥 הדבק רשימה מוואטסאפ"),
+      S.showPaste ? h("div",null,
+        h("textarea",{id:"pasteBox",placeholder:"כל שם בשורה. מספרים ואימוג׳ים יוסרו לבד."}),
+        h("button",{class:"btn full",style:"margin-top:8px",onclick:()=>{const names=parsePaste($("pasteBox").value); if(!names.length){toast("לא נמצאו שמות");return;} S.showPaste=false; adminAdd(names);}},"הוסף את כולם לפי הסדר")) : null,
+      h("div",{class:"hint",style:"margin-top:6px"},"שלח לקבוצה את הקישור להרשמה:"),
+      shareRow(inviteText())));
+  }
+  const a=S.signups.slice(0,cap), w=S.signups.slice(cap);
+  out.push(h("div",{class:"card"},
+    h("h2",null,"✅ משחקים השבוע",h("span",{class:"count"},`${a.length}/${cap}`)),
+    a.length ? h("ol",{class:"list"},a.map((s,i)=>rowFor(s,i,false))) : h("div",{class:"empty"},"עדיין אין נרשמים. תהיה הראשון!")));
+  if(w.length) out.push(h("div",{class:"card waitcard"},
+    h("h2",null,"⏳ רשימת המתנה",h("span",{class:"count"},w.length)),
+    h("div",{class:"hint",style:"margin-bottom:6px"},"כשמישהו מבטל, הראשון בהמתנה עולה אוטומטית."),
+    h("ol",{class:"list"},w.map((s,j)=>rowFor(s,cap+j,true)))));
+  if(!payActive()) out.push(payCard());   // "I paid for the pitch" button sits below the list
+  if(S.signups.length) out.push(h("div",{class:"card"},h("h2",null,"📤 שיתוף הרשימה"),shareRow(listText())));
+  out.push(navRow());
+  return out;
+}
+
+// --- teams view ---
+function setTeamColor(optIdx, i, ci){
+  const T=S.teams; if(!T) return;
+  const options=T.options.map((o,j)=>{
+    if(j!==optIdx) return o;
+    const arr=optColorSlots(o), k=arr.indexOf(ci);
+    if(k>=0 && k!==i) arr[k]=arr[i];   // swap so each team keeps a unique color
+    arr[i]=ci;
+    return {...o, colors:arr};
+  });
+  S.teams={...T, options}; S.colorPick=null; render();
+  run(()=>updateDoc(teamsRef,{options}), `הצבע עודכן ל${COLORS[ci].n} ✔`);
+}
+function pickPlayer(o,t,kind,idx,name){
+  if(S.inSel){ bringIn(S.inSel, name); return; }   // a waiting player was chosen: he takes this player's place
+  const sel=S.swapSel;
+  if(!sel || sel.o!==o){ S.swapSel={o,t,kind,idx,name}; render(); return; }
+  if(sel.t===t && sel.kind===kind && sel.idx===idx){ S.swapSel=null; render(); return; }
+  if(sel.t===t){ S.swapSel={o,t,kind,idx,name}; render(); return; }   // same team: just change selection
+  const T=S.teams;
+  const options=T.options.map((op,j)=>{
+    if(j!==o) return op;
+    const teams=op.teams.map(x=>({...x, players:[...x.players], subs:[...(x.subs||[])]}));
+    const A=teams[sel.t][sel.kind==="sub"?"subs":"players"], B=teams[t][kind==="sub"?"subs":"players"];
+    [A[sel.idx],B[idx]]=[B[idx],A[sel.idx]];
+    return {...op, teams};
+  });
+  S.teams={...T, options}; S.swapSel=null; render();
+  run(()=>updateDoc(teamsRef,{options}), `🔁 ${sel.name} ⇄ ${name}`);
+}
+// a waiting player goes into the teams in place of someone (in every option); that one can also leave the list
+async function bringIn(newName, oldName){
+  S.inSel=null; render();
+  await replacePlayer(oldName, newName);
+  const su=S.signups.find(s=>norm(s.name)===norm(oldName) && !s.guestOf);
+  if(su && confirm(`${newName} נכנס במקום ${oldName}.\nלהוציא את ${oldName} גם מרשימת השבוע?`)) { await run(()=>deleteDoc(doc(db,"signups",su.id)),`${oldName} הוצא מהרשימה`); if(cancelLocked()) recordLate(oldName); }
+}
+function waitingInCard(){
+  const T=S.teams; if(!T || !S.isAdmin) return null;
+  const inOpt=new Set(T.options.flatMap(o=>o.teams.flatMap(t=>t.players.concat(t.subs||[]).map(norm))));
+  const cands=S.signups.filter(s=>!inOpt.has(norm(s.name))).map(s=>s.name);
+  if(!cands.length) return null;
+  return h("div",{class:"card"},
+    h("h2",null,"⏳ להכניס ממתין לכוחות"),
+    h("div",{class:"hint"},S.inSel?`נבחר: ${S.inSel}. עכשיו לחץ על השחקן בכוחות שהוא מחליף (בכל אופציה, אותו מקום).`:"מישהו ביטל? לחץ על הממתין, ואז על השחקן בכוחות שהוא מחליף. שאר הכוחות לא זזים."),
+    h("div",{class:"chips",style:"margin-top:6px"},cands.map(n=>h("button",{class:"chip"+(S.inSel===n?" on":""),onclick:()=>{ S.inSel=S.inSel===n?null:n; S.swapSel=null; render(); }},n))),
+    S.inSel ? h("button",{class:"linkbtn",onclick:()=>{ S.inSel=null; render(); }},"ביטול") : null);
+}
+function swapHint(o){
+  if(S.inSel) return h("div",{class:"swaphint on"},`⏳ לחץ על השחקן ש${S.inSel} נכנס במקומו`);
+  const sel=S.swapSel;
+  if(sel && sel.o===o) return h("div",{class:"swaphint on"},`🔁 נבחר: ${sel.name}. עכשיו לחץ על שחקן בקבוצה אחרת להחלפה`,
+    h("button",{class:"linkbtn",onclick:()=>{S.swapSel=null;render();}},"ביטול"));
+  return h("div",{class:"swaphint"},"💡 להחלפה ידנית: לחץ על שחקן ואז על שחקן בקבוצה אחרת");
+}
+function teamCard(tm,i,showPow,opt,optIdx){
+  const c=optColor(opt,i), gk=gkSet(opt||{});
+  const pow=showPow ? tm.players.reduce((a,n)=>a+ratingOf(n),0)/Math.max(1,tm.players.length) : null;
+  const nm=p=>gk.has(norm(p))?`${p} 🧤`:p;
+  const key=`${optIdx}:${i}`, picking=S.isAdmin && S.colorPick===key, cur=optColorSlots(opt)[i];
+  return h("div",{class:"team",style:`border-top:5px solid ${c.c==="#ffffff"?"#d1d5db":c.c}`},
+    h("div",{class:"th"+(S.isAdmin?" pickable":""),onclick:S.isAdmin?()=>{ S.colorPick=picking?null:key; render(); }:null},
+      h("span",{class:"sw",style:`background:${c.c}`}),c.n,
+      S.isAdmin ? h("span",{class:"pickhint"},picking?"סגור":"🎨 שנה צבע") : null,
+      h("small",null,`${tm.players.length} שחקנים`+(pow!=null?` · כוח ${pow.toFixed(1)}`:""))),
+    picking ? h("div",{class:"swatches teampick"},COLORS.map((col,ci)=>h("button",{class:"swatch"+(ci===cur?" on":""),"aria-label":col.n,title:col.n,style:`background:${col.c}`,onclick:e=>{ e.stopPropagation(); setTeamColor(optIdx,i,ci); }}))) : null,
+    h("ul",null,tm.players.map((p,j)=>playerChip(p,j,"player")),
+      (tm.subs||[]).map((p,j)=>playerChip(p,j,"sub"))));
+  function playerChip(p,j,kind){
+    const label=(kind==="sub"?"🔄 ":"")+nm(p);
+    if(!S.isAdmin || optIdx==null) return h("li",{class:kind==="sub"?"sub":null},label);
+    const sel=S.swapSel, on=sel && sel.o===optIdx && sel.t===i && sel.kind===kind && sel.idx===j;
+    const target=sel && sel.o===optIdx && sel.t!==i;
+    return h("li",{class:(kind==="sub"?"sub ":"")+"swappable"+(on?" sel":"")+(target?" target":""),onclick:()=>pickPlayer(optIdx,i,kind,j,p)},label);
+  }
+}
+function optionBlock(opt, idx, mode){
+  const v=roundVotes(), cnt=v.filter(x=>x.choice===idx).length, total=v.length;
+  const voting=S.teams.status==="voting", mine=myVote()===idx;
+  const st=S.isOwner?optionStrength(opt):null;
+  const bad=S.isAdmin?apartViolations(opt):0;
+  return h("div",{class:"opt"+(mine?" mine":"")},
+    S.teams.options.length>1 ? h("div",{class:"opth"},
+      h("b",null,OPT_NAMES[idx]),
+      st ? h("small",null,`פער כוח ${st.gap.toFixed(2)}`) : null,
+      voting ? h("span",{class:"vcount"},cnt===1?"קול אחד":`${cnt} קולות`) : null) : null,
+    bad ? h("div",{class:"stale",style:"margin-top:6px"},`⚠️ ${bad} זוגות ״לא ביחד״ באותה קבוצה`) : null,
+    voting && total ? h("div",{class:"vbar"},h("i",{style:`width:${cnt/total*100}%`})) : null,
+    S.isAdmin ? swapHint(idx) : null,
+    h("div",{class:"teams"},opt.teams.map((tm,i)=>teamCard(tm,i,S.isOwner,opt,idx))),
+    mode==="vote" ? h("button",{class:"btn full big"+(mine?" chosen":""),style:"margin-top:10px",onclick:()=>vote(idx)}, mine?`✔ הצבעת ל${OPT_NAMES[idx]}`:`אני בעד ${OPT_NAMES[idx]}`) : null,
+    // an organizer who plays votes too (with the name he has on the list)
+    mode==="admin" && voting ? h("button",{class:"btn ghost full"+(mine?" chosen":""),style:"margin-top:10px",onclick:()=>adminVote(idx)}, mine?`✔ הצבעת ל${OPT_NAMES[idx]}`:`🙋 גם אני משחק: אני בעד ${OPT_NAMES[idx]}`) : null,
+
+    mode==="admin" ? h("div",null,
+      h("div",{class:"hint",style:"margin-top:10px"}, S.teams.options.length>1 ? "שליחת האופציה הזו בנפרד:" : "שליחה:"),
+      imageShare("opt"+idx, optionText(idx)),
+      h("button",{class:"btn full",style:"margin-top:8px",onclick:()=>setStatus("final",idx)}, S.teams.options.length>1?`✔ קבע את ${OPT_NAMES[idx]}`:"✔ קבע את החלוקה")) : null);
+}
+function needMyName(){ toast("כדי להצביע בשמך, חבר קודם את הטלפון שלך (כרטיס ״📱 חבר את הטלפון שלך״ ברשימה)"); S.admLinkLater=false; S.tab="list"; render(); window.scrollTo({top:0,behavior:"smooth"}); }
+function adminVote(idx){
+  if(!lsGet("myName")) return needMyName();
+  vote(idx);
+}
+function splitControls(){
+  const cap=S.cfg.capacity, active=S.signups.slice(0,cap), waiting=S.signups.slice(cap);
+  const k=Math.min(S.cfg.numTeams,Math.max(1,active.length)), sz=sizesFor(active.length,k);
+  const slots=colorSlots(S.cfg.numTeams);
+  const subsN=waiting.filter(s=>S.subSel.has(s.id)).length;
+  const gkN=active.filter(s=>isGK(s.name)).length;
+  return h("div",{class:"card"},
+    h("h2",null,"🎲 חלוקת כוחות"),
+    h("div",{class:"hint"},active.length?`${active.length} שחקנים ל-${k} קבוצות (${[...new Set(sz)].sort((a,b)=>b-a).join(" / ")} בקבוצה)`+(subsN?` + ${subsN} מחליפים`:"")+(gkN?` · ${gkN} שוערים 🧤`:"")+(S.apart.length?` · ${S.apart.length} זוגות ״לא ביחד״`:"")+". יתקבלו 2 אופציות מאוזנות.":"אין עדיין שחקנים ברשימה."),
+    h("button",{class:"linkbtn",onclick:()=>{S.showColors=!S.showColors;render();}},
+      S.showColors?"סגור צבעים":"🎨 צבעי ברירת מחדל ", !S.showColors ? slots.map(c=>h("span",{class:"dot",style:`background:${COLORS[c].c}`})) : null),
+    S.showColors ? h("div",{class:"colors"}, slots.map((cur,slot)=>h("div",{class:"crow"},
+      h("div",{class:"clbl"},`קבוצה ${slot+1}: `,h("b",null,COLORS[cur].n)),
+      h("div",{class:"swatches"},COLORS.map((col,ci)=>h("button",{class:"swatch"+(ci===cur?" on":""),"aria-label":col.n,style:`background:${col.c}`,onclick:()=>pickColor(slot,ci)})))))) : null,
+    waiting.length ? h("div",{class:"subsel"},
+      h("div",{class:"hint"},"🔄 לצרף מרשימת ההמתנה כמחליפים? (לחץ לסימון)"),
+      h("div",{class:"chips"},waiting.map(s=>h("button",{class:"chip"+(S.subSel.has(s.id)?" on":""),onclick:()=>{ S.subSel.has(s.id)?S.subSel.delete(s.id):S.subSel.add(s.id); render(); }},(S.subSel.has(s.id)?"✔ ":"")+s.name)))) : null,
+    !S.isOwner ? h("div",{class:"hint",style:"margin-top:8px"},"🔒 החלוקה נעשית בשרת לפי הדירוגים של המארגן הראשי. הדירוגים עצמם לא מוצגים לך.") : null,
+    h("button",{class:"btn full big",style:"margin-top:12px",disabled:S.busyTeams,onclick:makeTeams},S.busyTeams?"מחלק…":S.teams?"🔄 צור אופציות חדשות":"⚽ צור 2 אופציות לכוחות"));
+}
+function ensureResDraft(){
+  const T=S.teams; if(!T||T.status!=="final") return null;
+  const opt=T.options[T.chosen??0], saved=S.history.find(x=>x.id===String(T.at));
+  const savedWins = opt.teams.map((_,i)=>(((saved&&saved.teams)||[])[i]||{}).wins||0), sig=T.at+":"+savedWins.join(",");
+  if(S.resFor!==T.at || S.resSig!==sig){ S.resFor=T.at; S.resSig=sig; S.resDraft=savedWins.slice(); }
+  return S.resDraft;
+}
+function resultsCard(){
+  const T=S.teams, opt=T.options[T.chosen??0];
+  const saved=S.history.find(x=>x.id===String(T.at));
+  ensureResDraft();
+  const d=S.resDraft;
+  return h("div",{class:"card"},
+    h("h2",null,"🏆 תוצאות הערב", saved?h("span",{class:"count"},"✔ נשמר"):null),
+    h("div",{class:"hint"},"כמה משחקים כל קבוצה ניצחה? התוצאות נכנסות לטבלה."),
+    opt.teams.map((t,i)=>{ const c=optColor(opt,i); return h("div",{class:"stepper"},
+      h("div",{class:"lbl"},h("b",null,h("span",{class:"dot",style:`background:${c.c};margin-inline-end:6px`}),c.n)),
+      h("div",{class:"ctrl"},
+        h("button",{onclick:()=>{ if(d[i]>0){ d[i]--; render(); } }},"−"),
+        h("output",null,d[i]),
+        h("button",{onclick:()=>{ d[i]++; render(); }},"+"))); }),
+    h("button",{class:"btn full",style:"margin-top:10px",onclick:saveResults}, saved?"💾 עדכן תוצאות":"💾 שמור תוצאות"));
+}
+function fmtLeftH(ms){ const m=Math.max(0,Math.round(ms/60000)); return m>=60?`${Math.floor(m/60)} ש׳ ${m%60?(m%60)+" ד׳":""}`.trim():`${m} ד׳`; }
+// opt: the teams option, for opening a new vote; null: the current MVP vote (mvp/current)
+function mvpCard(opt){
+  const M=S.mvp, names=(M && !opt) ? (M.names||[]) : (opt ? opt.teams.flatMap(t=>t.players.concat(t.subs||[])) : []);
+  if(S.isAdmin){
+    if(opt) return h("div",{class:"card mvpc"},h("h2",null,"⭐ MVP של הערב"),
+      h("div",{class:"hint"},`אחרי המשחק, פתח הצבעה וכולם יבחרו את השחקן הטוב ביותר. ההצבעה פתוחה ${MVP_HOURS} שעות (גם אם פותחים רשימה חדשה), ונסגרת לבד. תיקו = כל המובילים MVP.`),
+      h("button",{class:"btn full",style:"margin-top:10px",onclick:()=>openMvp(opt)},"⭐ פתח הצבעת MVP"));
+    if(mvpIsOpen()){
+      const tally=mvpTally(), cnt=new Map(tally);
+      return h("div",{class:"card mvpc"},
+        h("h2",null,"⭐ הצבעת MVP",h("span",{class:"count"},`${mvpVoters().length} הצביעו`)),
+        h("div",{class:"hint"},`⏳ נסגרת לבד בעוד ${fmtLeftH(M.closeAt-Date.now())}. בתיקו, כל המובילים יהיו MVP.`),
+        h("div",{class:"hint"},"לחיצה על שם כאן קובעת אותו כ-MVP ידנית. כדי להצביע כשחקן, השתמש בחלק \"🙋\" למטה."),
+        votersBox(mvpVoters(),"mvpVotes"),
+        S.isOwner && mvpRoundVotes().length ? h("details",{class:"aliasbox",style:"margin-top:8px"},
+          h("summary",null,"🔒 מי הצביע למי (רק אתה רואה)"),
+          mvpRoundVotes().map(v=>({from:nameOfUid(v.id)||"❔ לא ידוע", to:v.name})).sort((a,b)=>a.to.localeCompare(b.to,"he")).map(x=>h("div",{class:"logp"},h("span",{class:"pn"},x.from),h("small",null,`⭐ ${x.to}`)))) : null,
+        h("div",{class:"chips"},names.slice().sort((a,b)=>(cnt.get(b)||0)-(cnt.get(a)||0)).map(n=>h("button",{class:"chip",onclick:()=>setMvp(n)},`${n}${cnt.get(n)?` · ${cnt.get(n)}`:""}`))),
+        // an organizer who played votes like everyone (not for himself)
+        (()=>{ const me=lsGet("myName"), mine=myMvpVote();
+          if(!me) return h("div",{class:"aliasbox",style:"margin-top:10px"},
+            h("div",{class:"hint"},"🙋 שיחקת? כדי להצביע בשמך, חבר קודם את הטלפון שלך."),
+            h("button",{class:"btn ghost full",onclick:needMyName},"📱 חבר את הטלפון שלי"));
+          return h("div",{class:"aliasbox",style:"margin-top:10px"},
+            h("div",{class:"hint"}, mine?`🙋 הצבעת ל${mine}. אפשר לשנות עד הסגירה.`:"🙋 גם אני שיחקתי, ההצבעה שלי:"),
+            h("div",{class:"chips"},names.filter(n=>norm(n)!==norm(me)).map(n=>h("button",{class:"chip"+(mine===n?" on":""),onclick:()=>voteMvp(n)},(mine===n?"⭐ ":"")+n)))); })(),
+        h("div",{class:"hint",style:"margin-top:10px"},"שלח לקבוצה קישור להצבעה:"),
+        shareRow(mvpCallText()),
+        h("button",{class:"btn full",style:"margin-top:10px",onclick:closeMvp},"סגור עכשיו והכרז"));
+    }
+    if(mvpWinners().length) return h("div",{class:"card mvpc"},h("h2",null,"⭐ MVP"),shareRow(mvpText()),
+      h("button",{class:"linkbtn",onclick:()=>{ const d={...M, open:true, closeAt:Date.now()+MVP_HOURS*3600000, winners:[]}; S.mvp=d; render(); run(()=>setDoc(mvpRef,d),"ההצבעה נפתחה מחדש"); }},"פתח הצבעה מחדש"));
+    if(M && !M.open) return h("div",{class:"card mvpc"},h("h2",null,"⭐ הצבעת MVP נסגרה"),h("div",{class:"hint"},"לא היו קולות."),
+      h("button",{class:"linkbtn",onclick:()=>{ const d={...M, open:true, closeAt:Date.now()+MVP_HOURS*3600000, winners:[]}; S.mvp=d; render(); run(()=>setDoc(mvpRef,d),"ההצבעה נפתחה מחדש"); }},"פתח הצבעה מחדש"));
+    return null;
+  }
+  if(!mvpIsOpen()) return null;
+  const mine=myMvpVote();
+  return h("div",{class:"card mvpc"},
+    h("h2",null,"⭐ מי ה-MVP של הערב?"),
+    h("div",{class:"hint"}, (mine?`הצבעת ל${mine}. אפשר לשנות עד שההצבעה נסגרת.`:"בחר את השחקן הטוב ביותר הערב:")+` · נסגרת בעוד ${fmtLeftH(M.closeAt-Date.now())}`),
+    h("div",{class:"chips"},names.filter(n=>norm(n)!==norm(lsGet("myName"))).map(n=>h("button",{class:"chip"+(mine===n?" on":""),onclick:()=>voteMvp(n)},(mine===n?"⭐ ":"")+n))));
+}
+// someone cancelled after the split: put another player in his exact place, in every option, without re-splitting
+function replaceCard(){
+  const T=S.teams, cap=S.cfg.capacity, active=S.signups.slice(0,cap), waiting=S.signups.slice(cap);
+  const optNames=[...new Set(T.options.flatMap(o=>o.teams.flatMap(t=>t.players)))];
+  const inOpt=new Set(optNames.map(norm)), act=new Set(active.map(s=>norm(s.name)));
+  const gone=optNames.filter(n=>!act.has(norm(n)));
+  const fresh=active.filter(s=>!inOpt.has(norm(s.name))).map(s=>s.name);
+  const more=waiting.map(s=>s.name).filter(n=>!inOpt.has(norm(n)) && !fresh.includes(n));
+  if(!gone.length && !fresh.length) return null;
+  const pickers=n=>h("div",{class:"chips",style:"margin-top:6px"},
+    fresh.map(x=>h("button",{class:"chip on",onclick:()=>replacePlayer(n,x)},`⬅️ ${x}`)),
+    more.map(x=>h("button",{class:"chip",onclick:()=>replacePlayer(n,x)},x)));
+  return h("div",{class:"card"},
+    h("h2",null,"🔁 הרשימה השתנתה אחרי החלוקה"),
+    h("div",{class:"hint"},"אפשר להכניס מחליף בדיוק למקום של מי שיצא, בכל האופציות, בלי לחלק מחדש. ההצבעה ממשיכה כרגיל."),
+    gone.map(g=>h("div",{style:"margin-top:10px"},
+      h("div",null,"❌ ",h("b",null,g)," כבר לא ברשימה. מי נכנס במקומו?"),
+      fresh.length||more.length ? pickers(g) : h("div",{class:"hint"},"אין כרגע מי שיכנס. כשמישהו יירשם, הוא יופיע כאן."))),
+    // someone joined but nobody left the teams (e.g. the name was written differently): choose whom he replaces
+    !gone.length ? h("div",{style:"margin-top:10px"},
+      h("div",null,"➕ ",h("b",null,fresh.join(", "))," ברשימה אבל לא בכוחות. במקום מי?"),
+      h("div",{class:"chips",style:"margin-top:6px"},optNames.slice().sort((a,b)=>a.localeCompare(b,"he")).map(n=>h("button",{class:"chip",onclick:()=>replacePlayer(n,fresh[0])},n)))) : null,
+    fresh.length && gone.length ? h("div",{class:"hint",style:"margin-top:8px"},"⬅️ = ברשימה ועוד לא בכוחות.") : null);
+}
+async function replacePlayer(oldName, newName){
+  const T=S.teams; if(!T) return;
+  const sw=n=>norm(n)===norm(oldName)?newName:n;
+  const options=T.options.map(o=>({...o,
+    teams:o.teams.map(t=>({...t, players:t.players.map(sw), subs:(t.subs||[]).filter(n=>norm(n)!==norm(newName)).map(sw)})),
+    gks:(o.gks||[]).filter(n=>norm(n)!==norm(oldName)).concat(isGK(newName)&&!(o.gks||[]).some(n=>norm(n)===norm(newName))?[newName]:[])}));
+  S.teams={...T, options}; render();
+  await run(()=>updateDoc(teamsRef,{options}),`✔ ${newName} נכנס במקום ${oldName}`);
+}
+function viewTeams(){
+  const out=[], T=S.teams, cap=S.cfg.capacity, active=S.signups.slice(0,cap);
+  if(S.isAdmin) out.push(splitControls());
+  else if((T && T.status==="voting") || mvpIsOpen()) out.push(whoCard());
+  // MVP of the last game (its vote stays open 24h, also after a new list)
+  if(S.mvp && (mvpIsOpen() || mvpWinners().length || S.isAdmin)){
+    if(mvpWinners().length) out.push(h("div",{class:"banner mvp"},`⭐ ה-MVP של הערב: ${joinNames(mvpWinners())}`));
+    out.push(mvpCard(null));
+  }
+  const visible = T && (S.isAdmin || T.status!=="draft");
+  if(!visible){ out.push(h("div",{class:"card"},h("div",{class:"empty"},"הכוחות עוד לא חולקו השבוע"))); return out; }
+
+  if(S.isAdmin){
+    const shown = T.status==="final" ? [T.options[T.chosen??0]] : T.options;
+    const names=new Set(active.map(s=>norm(s.name)));
+    const stale = shown.some(o=>{ const p=o.teams.flatMap(t=>t.players.map(norm)); return p.length!==names.size || p.some(n=>!names.has(n)); });
+    if(stale){ const rc=replaceCard(); out.push(rc || h("div",{class:"stale"},"⚠️ הרשימה השתנתה מאז החלוקה. לחץ ״צור אופציות חדשות״ לעדכון.")); }
+    else out.push(waitingInCard());
+  }
+
+  if(T.status==="final"){
+    const idx=T.chosen??0, opt=T.options[idx];
+    if(!S.mvp || S.mvp.round!==T.at){ if(S.isAdmin) out.push(mvpCard(opt)); }
+    out.push(h("div",{class:"banner final"},"✅ אלה הכוחות להשבוע"+(T.options.length>1?` (${OPT_NAMES[idx]})`:"")));
+    if(S.isAdmin) out.push(swapHint(idx));
+    out.push(h("div",{class:"teams"},opt.teams.map((tm,i)=>teamCard(tm,i,S.isOwner,opt,idx))));
+    if(S.isAdmin){
+      out.push(h("div",{class:"card"},h("h2",null,"📤 שליחת הכוחות"),imageShare("final", finalText()),
+        T.options.length>1 ? h("button",{class:"linkbtn",onclick:()=>setStatus("draft")},"↩ חזור לשתי האופציות") : null));
+      out.push(resultsCard());
+    }
+    return out;
+  }
+
+  if(T.status==="voting"){
+    const v=roundVotes();
+    out.push(h("div",{class:"banner voting"},
+      S.isAdmin ? `🗳️ ההצבעה פתוחה · ${v.length} הצביעו` : (myVote()==null ? "🗳️ איזה כוחות אתה מעדיף? בחר אופציה" : `🗳️ הצבעת ל${OPT_NAMES[myVote()]}. אפשר לשנות עד סגירת ההצבעה.`)));
+    T.options.forEach((o,i)=>out.push(optionBlock(o,i, S.isAdmin?"admin":"vote")));
+    if(S.isAdmin) out.push(h("div",{class:"card"},
+      h("h2",null,"🗳️ ניהול ההצבעה"),
+      votersBox(v),
+      h("div",{class:"hint"},"1. שלח לקבוצה תמונה של שתי האופציות:"),
+      imageShare("vote", null),
+      h("div",{class:"hint",style:"margin-top:12px"},"2. שלח את הקישור להצבעה:"),
+      shareRow(voteText()),
+      h("button",{class:"btn full",style:"margin-top:10px",onclick:closeVoting},"סגור הצבעה וקבע את המנצחת"),
+      h("button",{class:"linkbtn",onclick:()=>setStatus("draft")},"בטל הצבעה")));
+    return out;
+  }
+
+  out.push(h("div",{class:"banner"}, T.options.length>1 ? "👀 רק אתה רואה את האופציות. בחר אחת, או פתח הצבעה לשחקנים." : "👀 רק אתה רואה את החלוקה. קבע אותה כדי שכולם יראו."));
+  T.options.forEach((o,i)=>out.push(optionBlock(o,i,"admin")));
+  if(T.options.length>1) out.push(h("div",{class:"card"},
+    h("h2",null,"🗳️ הצבעה"),
+    h("div",{class:"hint"},"השחקנים יראו את שתי האופציות באפליקציה ויוכלו להצביע. כל טלפון מצביע פעם אחת."),
+    h("button",{class:"btn full big",style:"margin-top:10px",onclick:()=>setStatus("voting")},"🗳️ פתח הצבעה לשחקנים")));
+  return out;
+}
+
+// --- stats view ---
+// ---------- merge / rename a player everywhere (table, attendance, payments, lists) ----------
+async function mergePlayer(from, to){
+  from=clean(from); to=clean(to);
+  if(!from || !to || norm(from)===norm(to)) return;
+  if(!confirm(`לאחד את "${from}" לתוך "${to}"?\nכל התוצאות, הנוכחות וה-MVP של "${from}" יעברו ל"${to}".`)) return;
+  const sw=n=>norm(n)===norm(from)?to:n, swl=a=>[...new Set((a||[]).map(sw))];
+  const batch=writeBatch(db); let n=0;
+  S.history.forEach(g=>{
+    const has=JSON.stringify(g).includes(from); if(!has) return;
+    const mv=Array.isArray(g.mvp)?swl(g.mvp):(g.mvp?sw(g.mvp):g.mvp);
+    const rec={...g, teams:(g.teams||[]).map(t=>({...t, players:swl(t.players), subs:swl(t.subs)})), mvp:mv??null}; delete rec.id;
+    batch.set(doc(db,"history",g.id),rec); n++;
+  });
+  S.weeks.forEach(w=>{
+    const has=JSON.stringify(w).includes(from); if(!has) return;
+    const rec={...w, players:swl(w.players), waiting:swl(w.waiting)}; delete rec.id;
+    if(w.pay) rec.pay={...w.pay, payer:sw(w.pay.payer||""), paid:(w.pay.paid||[]).map(x=>({...x,n:sw(x.n)})), unpaid:swl(w.pay.unpaid)};
+    batch.set(doc(db,"weeks",w.id),rec); n++;
+  });
+  if(S.lates.some(x=>norm(x.n)===norm(from))){ batch.set(latesRef,{list:S.lates.map(x=>({...x,n:sw(x.n)}))}); n++; }
+  const pr=S.cfg.priority||[];
+  if(pr.some(x=>norm(x)===norm(from))){ batch.update(cfgRef,{priority:[...new Set(pr.map(x=>norm(x)===norm(from)?norm(to):x))]}); n++; }
+  if(S.isOwner && S.ratings.some(r=>norm(r.n)===norm(from))){
+    const keep=S.ratings.find(r=>norm(r.n)===norm(to)), old=S.ratings.find(r=>norm(r.n)===norm(from));
+    const list=S.ratings.filter(r=>norm(r.n)!==norm(from)).concat(keep?[]:[{...old, n:to}]);
+    if(keep && !keep.phone && old.phone) list.splice(list.indexOf(keep),1,{...keep, phone:old.phone});
+    batch.set(ratRef,{list}); n++;
+  }
+  if(!n){ toast("לא נמצא מה לאחד"); return; }
+  S.mergeFrom=null; render();
+  await run(()=>batch.commit(),`✔ "${from}" אוחד לתוך "${to}"`);
+}
+function mergeBox(st){
+  if(!S.mergeFrom) return null;
+  const others=st.map(x=>x.name).filter(n=>norm(n)!==norm(S.mergeFrom));
+  return h("div",{class:"aliasbox",style:"margin-top:10px"},
+    h("div",{class:"hint"},`"${S.mergeFrom}" הוא בעצם... (בחר את השם הנכון, או כתוב שם חדש)`),
+    h("div",{class:"chips"},others.map(n=>h("button",{class:"chip",onclick:()=>mergePlayer(S.mergeFrom,n)},n))),
+    h("div",{class:"addrow",style:"margin-top:8px"},
+      h("input",{id:"f_mergeTo",type:"text",placeholder:"או שם חדש (שינוי שם)",value:S.draft.mergeTo||"",oninput:e=>{S.draft.mergeTo=e.target.value;}}),
+      h("button",{class:"btn",onclick:()=>{ const t=S.draft.mergeTo; delete S.draft.mergeTo; mergePlayer(S.mergeFrom,t||""); }},"שמור")),
+    h("button",{class:"linkbtn muted",onclick:()=>{ S.mergeFrom=null; render(); }},"ביטול"));
+}
+function viewStats(){
+  const st=computeStats(), out=[];
+  if(!st.length){
+    out.push(h("div",{class:"card"},h("h2",null,"🏆 טבלת העונה"),h("div",{class:"empty"},"עוד אין תוצאות. אחרי כל משחק המארגן מזין כמה ניצחה כל קבוצה, והטבלה מתעדכנת.")));
+    return out;
+  }
+  const medal=i=>["🥇","🥈","🥉"][i]||String(i+1);
+  out.push(h("div",{class:"card"},
+    h("h2",null,"🏆 טבלת העונה",h("span",{class:"count"},`${S.history.length} ערבים`)),
+    h("table",{class:"stats-t"},
+      h("thead",null,h("tr",null,h("th",null,"#"),h("th",{class:"tn"},"שחקן"),h("th",null,"ערבים"),h("th",null,"ניצחונות"),h("th",{class:"thwrap"},"קבוצה מנצחת"),h("th",null,"⭐"))),
+      h("tbody",null,st.map((s,i)=>h("tr",{class:i<3?"top":""},
+        h("td",null,medal(i)),h("td",{class:"tn"+(S.mergeMode?" click":"")+(S.mergeFrom===s.name?" sel":""),onclick:S.mergeMode?()=>{ S.mergeFrom=S.mergeFrom===s.name?null:s.name; render(); }:null},S.mergeMode?`✏️ ${s.name}`:s.name),h("td",null,s.games),h("td",null,h("b",null,s.wins)),h("td",null,s.best),h("td",null,s.mvp||""))))),
+    h("div",{style:"margin-top:10px"},imageShare("stats", statsText())),
+    S.isAdmin ? mergeBox(st) : null,
+    S.isAdmin ? h("button",{class:"linkbtn",style:"margin-top:8px",onclick:()=>{ S.mergeMode=!S.mergeMode; S.mergeFrom=null; render(); }},S.mergeMode?"✔ סיימתי לערוך שמות":"✏️ איחוד ושינוי שמות (שחקן שמופיע פעמיים)") : null,
+    S.mergeMode && !S.mergeFrom ? h("div",{class:"hint"},"לחץ על השם הלא נכון בטבלה (למשל ״אורן״), ואז בחר את השם הנכון (״אורן לוי״).") : null,
+    h("div",{class:"hint",style:"margin-top:8px"},"ניצחונות = כמה משחקים הקבוצה שלך ניצחה. קבוצה מנצחת = ערבים שהקבוצה שלך סיימה ראשונה. ⭐ = MVP.")));
+  out.push(h("div",{class:"card"},
+    h("h2",null,"📜 משחקים קודמים"),
+    S.isAdmin ? h("div",{class:"hint",style:"margin-bottom:4px"},"✏️ לעריכת תוצאה או MVP · 🗑 למחיקת ערב (רק אתה רואה את הכפתורים)") : null,
+    S.history.slice().reverse().map(g=>S.editHist===g.id ? histEditor(g) : h("div",{class:"hrow"},
+      h("span",{class:"hdate"},fmtDate(g.date||g.at)),
+      h("span",{class:"hres"},(g.teams||[]).map(t=>{ const c=COLORS[(t.color??0)%COLORS.length]; return `${c.e} ${t.wins||0}`; }).join("  ")+(g.mvp?`   ⭐ ${Array.isArray(g.mvp)?joinNames(g.mvp):g.mvp}`:"")),
+      S.isAdmin ? h("button",{class:"ic",title:"ערוך",onclick:()=>startEditHist(g)},"✏️") : null,
+      S.isAdmin ? h("button",{class:"ic x"+(S.confirmDel===g.id?" confirm":""),title:"מחק",onclick:()=>{
+        if(S.confirmDel!==g.id){ S.confirmDel=g.id; render(); setTimeout(()=>{ if(S.confirmDel===g.id){ S.confirmDel=null; render(); } },4000); return; }
+        S.confirmDel=null; deleteResult(g.id); }}, S.confirmDel===g.id?"מחק?":"🗑") : null)),
+    S.isAdmin ? h("button",{class:"btn warn full",style:"margin-top:14px",onclick:()=>{
+      if(!S.confirmResetHist){ S.confirmResetHist=true; render(); setTimeout(()=>{S.confirmResetHist=false;render();},4000); return; }
+      S.confirmResetHist=false; resetHistory(); }}, S.confirmResetHist?"בטוח? כל הטבלה תימחק. לחץ שוב":"🗑 אפס את כל הטבלה") : null));
+  return out;
+}
+
+// attendance from weekly snapshots ("new week") plus evenings in the results table
+function attendanceWeeks(){
+  const wk=S.weeks.map(w=>({date:w.date||w.at, players:w.players||[]}));
+  S.history.forEach(g=>{
+    const d=g.date||g.at; if(!g.teams||!g.teams.length) return;
+    if(wk.some(w=>Math.abs(w.date-d)<3*86400000)) return;
+    wk.push({date:d, players:g.teams.flatMap(t=>(t.players||[]).concat(t.subs||[]))});
+  });
+  return wk.sort((a,b)=>a.date-b.date);
+}
+function attendance(){
+  const wk=attendanceWeeks(), m=new Map();
+  wk.forEach((w,i)=>{ new Set(w.players.map(norm)).forEach(k=>{ const n=w.players.find(p=>norm(p)===k);
+    const a=m.get(k)||{name:n, first:i, came:[]}; a.came.push(i); m.set(k,a); }); });
+  const lates=new Map(); S.lates.forEach(x=>lates.set(norm(x.n),(lates.get(norm(x.n))||0)+1));
+  return [...m.values()].map(a=>{
+    const weeks=wk.length-a.first, attended=a.came.length, pct=Math.round(attended/weeks*100);
+    const set=new Set(a.came), recent=[]; for(let i=Math.max(0,wk.length-8);i<wk.length;i++) recent.push(i<a.first?null:set.has(i));
+    let streak=0; for(let i=wk.length-1;i>=a.first && set.has(i);i--) streak++;
+    let missRun=0; for(let i=wk.length-1;i>=a.first && !set.has(i);i--) missRun++;
+    const label = weeks<2 ? {t:"חדש",c:"new"} : pct>=80 ? {t:"קבוע",c:"hi"} : pct>=50 ? {t:"לפעמים",c:"mid"} : {t:"נדיר",c:"lo"};
+    return {name:a.name, weeks, attended, pct, recent, streak, missRun, late:lates.get(norm(a.name))||0, label};
+  }).sort((x,y)=>y.pct-x.pct || y.attended-x.attended || x.name.localeCompare(y.name,"he"));
+}
+function attendanceCard(){
+  const wk=attendanceWeeks(), att=attendance();
+  if(!wk.length) return h("div",{class:"card"},h("h2",null,"📅 נוכחות"),
+    h("div",{class:"empty"},"עוד אין נתונים. בכל פעם שתלחץ ״פתח רשימה חדשה״ בהגדרות, השבוע שהסתיים נשמר כאן."));
+  const n=Math.min(8,wk.length);
+  return h("div",{class:"card"},
+    h("h2",null,"📅 נוכחות",h("span",{class:"count"},`${wk.length} שבועות`)),
+    h("div",{class:"hint"},`ריבוע ירוק = הגיע, אפור = לא הגיע (${n} השבועות האחרונים, החדש מימין). רק אתה רואה את זה.`),
+    h("table",{class:"att-t"},
+      h("thead",null,h("tr",null,h("th",{class:"tn"},"שחקן"),h("th",null,"נוכחות"),h("th",null,"אחרונים"),h("th",null,""))),
+      h("tbody",null,att.map(a=>h("tr",null,
+        h("td",{class:"tn"},h("b",null,a.name),h("small",null,
+          (a.streak>=3?`🔥 ${a.streak} ברצף`:a.missRun>=2?`😴 ${a.missRun} שבועות לא בא`:"")+(a.late?` ⏰${a.late}`:""))),
+        h("td",null,h("b",null,`${a.pct}%`),h("small",null,`${a.attended}/${a.weeks}`)),
+        h("td",null,h("div",{class:"dots"},a.recent.map(r=>h("i",{class:r==null?"na":r?"y":"n"})))),
+        h("td",null,h("span",{class:"tag "+a.label.c},a.label.t)))))));
+}
+function paymentsHistory(){
+  const out=[];
+  if(payActive()){
+    const act=activeList(), n=act.filter(s=>payMark(s.id)).length;
+    out.push(h("div",{class:"card"},h("h2",null,"💳 השבוע",h("span",{class:"count"},`${n}/${act.length} שילמו`)),
+      h("div",{class:"hint"},`${S.pay.payer.name} שילם על המגרש · ${payPrice()}₪ לשחקן`), payStatusList(true)));
+  } else out.push(h("div",{class:"card"},h("h2",null,"💳 השבוע"),h("div",{class:"hint"},"עוד אף אחד לא ביקש תשלום השבוע. מי ששילם על המגרש לוחץ ״שילמתי על המגרש״ בלשונית רשימה.")));
+  const wks=S.weeks.filter(w=>w.pay);
+  if(!wks.length){ out.push(h("div",{class:"card"},h("h2",null,"📒 היסטוריה"),h("div",{class:"empty"},"ההיסטוריה נשמרת בכל ״פתח רשימה חדשה״."))); return out; }
+  const m=new Map();
+  const get=n=>{ const k=norm(n); if(!m.has(k)) m.set(k,{name:n,paid:0,unpaid:0,payer:0,debt:0,last:[]}); return m.get(k); };
+  wks.forEach(w=>{ const p=w.pay;
+    (p.paid||[]).forEach(x=>{ const a=get(x.n); if(x.m==="payer") a.payer++; else a.paid++; });
+    (p.unpaid||[]).forEach(n=>{ const a=get(n); a.unpaid++; a.debt+=Number(p.price)||0; a.last.push(fmtDate(w.date||w.at)); });
+  });
+  const rows=[...m.values()].sort((a,b)=>b.unpaid-a.unpaid || b.payer-a.payer || a.name.localeCompare(b.name,"he"));
+  out.push(h("div",{class:"card"},
+    h("h2",null,"📒 היסטוריית תשלומים",h("span",{class:"count"},`${wks.length} שבועות`)),
+    h("table",{class:"att-t"},
+      h("thead",null,h("tr",null,h("th",{class:"tn"},"שחקן"),h("th",null,"שילם"),h("th",null,"לא שילם"),h("th",null,"🏟️ מגרש"))),
+      h("tbody",null,rows.map(a=>h("tr",null,
+        h("td",{class:"tn"},h("b",null,a.name),a.unpaid?h("small",null,`חוב ${a.debt}₪ · ${a.last.slice(-3).join(", ")}`):null),
+        h("td",null,a.paid),
+        h("td",null,a.unpaid?h("span",{class:"tag lo"},a.unpaid):"0"),
+        h("td",null,a.payer||""))))),
+    h("div",{class:"hint",style:"margin-top:8px"},"🏟️ = כמה פעמים שילם על המגרש בעצמו. החובות מחושבים לפי מי שלא סימן תשלום עד ״פתח רשימה חדשה״.")));
+  const recent=wks.slice().reverse().slice(0,6);
+  out.push(h("div",{class:"card"},h("h2",null,"🗓️ לפי שבוע"),
+    recent.map(w=>h("div",{class:"hrow"},
+      h("span",{class:"hdate"},fmtDate(w.date||w.at)),
+      h("span",{class:"hres",style:"font-weight:500"},`🏟️ ${w.pay.payer} · ${(w.pay.paid||[]).length}/${(w.pay.paid||[]).length+(w.pay.unpaid||[]).length} שילמו`,
+        (w.pay.unpaid||[]).length?h("small",{style:"display:block;color:#fca5a5"},"לא שילמו: "+w.pay.unpaid.join(", ")):null)))));
+  return out;
+}
+function latesCard(){
+  const lateCount=new Map(); S.lates.forEach(x=>{ const k=norm(x.n); const o=lateCount.get(k)||{n:x.n,c:0,last:0}; o.c++; o.last=Math.max(o.last,x.at||0); lateCount.set(k,o); });
+  return h("div",{class:"card"},
+      h("h2",null,"⏰ ביטולים מאוחרים"),
+      h("div",{class:"hint"},"כשאתה מסיר שחקן בזמן חסימת הביטול, זה נרשם כאן אוטומטית. אפשר גם להוסיף ידנית (למשל מי שביטל בוואטסאפ):"),
+      h("div",{class:"chips",style:"margin-top:6px"},
+        S.signups.filter(x=>!x.guestOf).map(x=>x.name).concat(S.lateAdd?knownNames().filter(n=>!S.signups.some(x=>norm(x.name)===norm(n))):[])
+          .map(n=>h("button",{class:"chip",onclick:()=>{ if(confirm(`לרשום ל${n} ביטול מאוחר?`)) addLateManual(n); }},`+ ${n}`))),
+      h("div",{class:"addrow",style:"margin-top:8px"},
+        h("input",{id:"f_lateName",type:"text",placeholder:"או כתוב שם",value:S.draft.lateName||"",oninput:e=>{S.draft.lateName=e.target.value;}}),
+        h("button",{class:"btn",onclick:()=>{ const n=clean(S.draft.lateName||""); if(!n){ toast("כתוב שם"); return; } delete S.draft.lateName; addLateManual(n); }},"הוסף")),
+      S.lateAdd ? null : h("button",{class:"linkbtn muted",onclick:()=>{ S.lateAdd=true; render(); }},"הצג גם שחקנים שלא ברשימה השבוע"),
+      lateCount.size ? [...lateCount.values()].sort((a,b)=>b.c-a.c).map(o=>h("div",{class:"prow"},
+        h("div",{class:"nm"},h("b",null,o.n),h("small",{class:"unr"},`${o.c} ביטולים · אחרון ${fmtDate(o.last)}`)),
+        h("button",{class:"ic x",title:"אפס",onclick:()=>removeLate(o.n)},"×"))) : h("div",{class:"empty"},"אין ביטולים מאוחרים 👍"));
+}
+function playersSeg(){
+  const v=S.playersView||"rate";
+  return h("div",{class:"seg"},
+    S.isOwner ? h("button",{class:v==="rate"?"on":"",onclick:()=>{S.playersView="rate";render();}},"⭐ דירוג ופרטים") : null,
+    h("button",{class:v==="att"?"on":"",onclick:()=>{S.playersView="att";render();}},"📅 נוכחות"),
+    h("button",{class:v==="pay"?"on":"",onclick:()=>{S.playersView="pay";render();}},"💳 תשלומים"));
+}
+function viewPlayers(){
+  if(!S.isOwner && (S.playersView||"rate")==="rate") S.playersView="att";
+  const all=new Map();
+  S.ratings.forEach(r=>all.set(norm(r.n),r.n));
+  S.signups.forEach(s=>{ if(!all.has(norm(s.name))) all.set(norm(s.name),s.name); });
+  const names=[...all.values()].sort((a,b)=>a.localeCompare(b,"he"));
+  const inp=h("input",{id:"rosterName",type:"text",placeholder:"הוסף שחקן קבוע",autocomplete:"off",
+    onkeydown:e=>{ if(e.key==="Enter"&&e.target.value.trim()){ setRating(clean(e.target.value),DEF_RATING); e.target.value=""; } }});
+  const sel=(key)=>h("select",{class:"sel",onchange:e=>{S.draft[key]=e.target.value;}},
+    h("option",{value:""},"בחר שחקן"), names.map(n=>{ const o=h("option",{value:n},n); if(S.draft[key]===n) o.selected=true; return o; }));
+  if(S.playersView==="att") return [playersSeg(), attendanceCard(), latesCard()];
+  if(S.playersView==="pay") return [playersSeg(), ...paymentsHistory()];
+  const sugs=ratingSuggestions();
+  const lateCount=new Map(); S.lates.forEach(x=>{ const k=norm(x.n); const o=lateCount.get(k)||{n:x.n,c:0,last:0}; o.c++; o.last=Math.max(o.last,x.at||0); lateCount.set(k,o); });
+  return [
+    playersSeg(),
+    sugs.length ? h("div",{class:"card sug"},
+      h("h2",null,"💡 הצעות לעדכון דירוג"),
+      h("div",{class:"hint"},"לפי התוצאות בטבלה מאז הדירוג האחרון של כל שחקן."),
+      sugs.map(s=>h("div",{class:"sugrow"},
+        h("div",{class:"nm"},h("b",null,`${s.name}: ${s.cur} ← ${s.to}`),
+          h("small",{class:"unr"},(s.perf>1?`הקבוצות שלו ניצחו פי ${s.perf.toFixed(1)} מהממוצע`:`הקבוצות שלו ניצחו רק ${Math.round(s.perf*100)}% מהממוצע`)+` · ${s.games} ערבים`)),
+        h("button",{class:"btn",onclick:()=>{ setRating(s.name,s.to); toast(`${s.name} עודכן ל-${s.to}`); }},"אשר"),
+        h("button",{class:"ic x",title:"התעלם",onclick:()=>dismissSug(s)},"×")))) : null,
+    h("div",{class:"card"},
+      h("h2",null,"⭐ דירוג שחקנים"),
+      h("div",{class:"hint"},`הדירוג (1 עד ${RATING_MAX}) משמש רק לאיזון הקבוצות, ורק אתה רואה אותו. שחקן בלי דירוג נחשב ${DEF_RATING}. 🧤 = שוער (אחד בכל קבוצה). לשוער אפשר לקבוע "ערך בחלוקה": כמה הוא נחשב באיזון הקבוצות, בלי לשנות את הדירוג שלו. לחיצה על שם = טלפון לוואטסאפ.`),
+      h("div",{class:"addrow",style:"margin-top:10px"},inp,h("button",{class:"btn",onclick:()=>{ if(inp.value.trim()){ setRating(clean(inp.value),DEF_RATING); inp.value=""; } }},"הוסף"))),
+    h("div",{class:"card"},
+      names.length ? h("div",null,names.map(n=>{
+        const r=rosterOf(n), val=r?r.r:0, gk=!!(r&&r.gk);
+        const su=S.signups.find(s=>norm(s.name)===norm(n)), selfPh=su&&su.uid&&su.uid!=="admin"?S.phones[su.uid]:"", ph=(r&&r.phone)||selfPh;
+        const row=h("div",{class:"prow"},
+          h("div",{class:"nm click",onclick:()=>{ S.editPhone=S.editPhone===n?null:n; render(); }},h("b",null,n),h("small",{class:"unr"}, (r?`דירוג ${val}`:"לא דורג")+(gk?" · שוער":"")+(ph?" · 📱":""))),
+          h("button",{class:"ic gk"+(gk?" on":""),title:"שוער",onclick:()=>toggleGK(n)},"🧤"),
+          h("div",{class:"stars"},Array.from({length:RATING_MAX},(_,k)=>k+1).map(i=>h("button",{class:i<=Math.round(val)?"on":"","aria-label":String(i),onclick:()=>setRating(n,i)},"★"))),
+          r?h("button",{class:"ic x",title:"הסר מהקבועים",onclick:()=>removeFromRoster(n)},"×"):h("span",{style:"width:28px"}));
+        const kvRow = gk ? h("div",{class:"kvrow"},
+          h("span",null,"🧤 ערך בחלוקה"),
+          h("button",{class:"ic",onclick:()=>setKv(n,(typeof r.kv==="number"?r.kv:val)-0.5)},"−"),
+          h("b",{class:"kvval"+(typeof r.kv==="number"?"":" dim")},String(typeof r.kv==="number"?r.kv:val)),
+          h("button",{class:"ic",onclick:()=>setKv(n,(typeof r.kv==="number"?r.kv:val)+0.5)},"+"),
+          typeof r.kv==="number" ? h("button",{class:"linkbtn muted",onclick:()=>setKv(n,null)},"כמו הדירוג") : h("small",{class:"unr"},"כרגע כמו הדירוג")) : null;
+        if(S.editPhone!==n) return kvRow ? h("div",null,row,kvRow) : row;
+        const pin=h("input",{id:"ph_"+n,type:"tel",dir:"ltr",inputmode:"tel",placeholder:"050-0000000",value:S.draft["ph:"+n] ?? prettyPhone((r&&r.phone)||""),oninput:e=>{S.draft["ph:"+n]=e.target.value;}});
+        return h("div",null,row,kvRow,h("div",{class:"phedit"},
+          selfPh ? h("div",{class:"hint"},`📱 ${n} מסר בהרשמה: ${prettyPhone(selfPh)}`) : null,
+          h("div",{class:"hint"},"טלפון לשליחת וואטסאפ ישיר (רק אתה רואה):"),
+          h("div",{class:"addrow"},pin,h("button",{class:"btn",onclick:()=>{ setRosterPhone(n,pin.value); delete S.draft["ph:"+n]; S.editPhone=null; }},"שמור"))));
+      })) : h("div",{class:"empty"},"אין עדיין שחקנים."))
+  ];
+}
+function apartCard(){
+  const names=knownNames();
+  const sel=(key)=>h("select",{class:"sel",onchange:e=>{S.draft[key]=e.target.value;}},
+    h("option",{value:""},"בחר שחקן"), names.map(n=>{ const o=h("option",{value:n},n); if(S.draft[key]===n) o.selected=true; return o; }));
+  return h("div",{class:"card"},
+    h("h2",null,"🚫 לא ביחד"),
+    h("div",{class:"hint"},"זוגות שהחלוקה תשים בקבוצות שונות. כל המנהלים רואים ויכולים לערוך."),
+    names.length>1 ? h("div",{class:"aprow"}, sel("apA"), h("span",null,"⟷"), sel("apB"),
+      h("button",{class:"btn",onclick:()=>addApart(S.draft.apA,S.draft.apB)},"הוסף")) : h("div",{class:"hint"},"צריך לפחות שני שחקנים."),
+    S.apart.length ? h("div",{style:"margin-top:8px"},S.apart.map((p,i)=>h("div",{class:"prow"},
+      h("div",{class:"nm"},h("b",null,`${p.a} ⟷ ${p.b}`)),
+      h("button",{class:"ic x",title:"הסר",onclick:()=>removeApart(i)},"×")))) : null);
+}
+
+function knownNames(){
+  const m=new Map();
+  const add=n=>{ if(n && !m.has(norm(n))) m.set(norm(n),n); };
+  S.ratings.forEach(r=>add(r.n)); S.signups.forEach(s=>add(s.name)); S.weeks.forEach(w=>(w.players||[]).concat(w.waiting||[]).forEach(add));
+  S.history.forEach(g=>(g.teams||[]).forEach(t=>(t.players||[]).concat(t.subs||[]).forEach(add)));
+  Object.values(S.phoneNames||{}).forEach(add); Object.values(S.whoMap||{}).forEach(add); S.lates.forEach(x=>add(x.n));
+  (S.cfg.priority||[]).forEach(p=>{ if(!m.has(p)) add(p); });
+  const hidden=new Set(S.cfg.hiddenNames||[]);
+  [...m.keys()].forEach(k=>{ if(hidden.has(k)) m.delete(k); });
+  return [...m.values()].sort((a,b)=>a.localeCompare(b,"he"));
+}
+function hideName(name){
+  const k=norm(name), hid=new Set(S.cfg.hiddenNames||[]); hid.add(k);
+  const pr=(S.cfg.priority||[]).filter(x=>x!==k);
+  setCfg({hiddenNames:[...hid], priority:pr}, `${name} הוסר מהרשימה`);
+}
+function togglePrio(name){
+  const set=new Set(S.cfg.priority||[]), k=norm(name);
+  set.has(k)?set.delete(k):set.add(k);
+  setCfg({priority:[...set]});
+}
+// who receives notifications: everyone / only the organizer / chosen testers
+const testRef = doc(db,"admin","pushTest");
+function pushModeCard(){
+  const c=S.cfg, mode=c.pushMode||"all", sel=S.pushTest||{uids:[],names:[]};
+  const set=new Set(sel.uids||[]);
+  const desc={all:"כל מי שהפעיל התראות מקבל אותן", admin:"השחקנים לא מקבלים כלום. אתה מקבל עותק של כל התראה", select:"רק השחקנים שבחרת מקבלים את ההתראות הרגילות שלהם, ואתה מקבל עותק"};
+  const toggle=s=>{ const u=new Set(set), names=new Map((sel.uids||[]).map((id,i)=>[id,(sel.names||[])[i]]));
+    if(u.has(s.uid)){ u.delete(s.uid); names.delete(s.uid); } else { u.add(s.uid); names.set(s.uid,s.name); }
+    const ids=[...u]; S.pushTest={uids:ids, names:ids.map(id=>names.get(id)||"")}; render();
+    run(()=>setDoc(testRef,S.pushTest)); };
+  const cands=S.signups.filter(s=>s.uid && s.uid!=="admin" && !s.guestOf);
+  const extra=(sel.uids||[]).map((id,i)=>({uid:id,name:(sel.names||[])[i]||"?"})).filter(x=>!cands.some(s=>s.uid===x.uid));
+  return h("div",null,
+    h("div",{class:"seg3"},
+      [["all","🔔 כולם"],["admin","🙋 רק אני"],["select","🎯 נבחרים"]].map(([k,l])=>h("button",{class:"btn "+(mode===k?"on":"ghost"),onclick:()=>setCfg({pushMode:k},k==="all"?"🔔 התראות לכולם":k==="admin"?"🔕 רק אתה תקבל התראות":"🎯 רק הנבחרים יקבלו התראות")},l))),
+    h("div",{class:"hint",style:"margin-top:6px"},desc[mode]),
+    mode==="select" ? h("div",null,
+      h("div",{class:"sub-h"},"מי מקבל? (מתוך מי שנרשם דרך האפליקציה)"),
+      cands.length||extra.length ? h("div",{class:"chips"},cands.concat(extra).map(s=>h("button",{class:"chip"+(set.has(s.uid)?" on":""),onclick:()=>toggle(s)},(set.has(s.uid)?"✔ ":"")+s.name))) : h("div",{class:"hint"},"אין עדיין שחקנים שנרשמו בעצמם השבוע."),
+      h("div",{class:"hint"},"רק מי שהפעיל התראות בטלפון שלו יקבל.")) : null,
+    h("button",{class:"btn ghost full",style:"margin-top:10px",disabled:S.testing,onclick:sendTestPush},
+      S.testing?"שולח…": mode==="select"&&set.size ? `🧪 שלח התראת בדיקה ל-${set.size} נבחרים ולך` : "🧪 שלח לי התראת בדיקה"),
+    S.adminPushOk ? null : h("div",null,
+      h("div",{class:"hint",style:"margin-top:6px"},"כדי לקבל התראות אצלך, הפעל התראות במכשיר הזה:"),
+      pushBox()));
+}
+async function sendTestPush(){
+  const mode=S.cfg.pushMode||"all", uids=mode==="select"?((S.pushTest||{}).uids||[]):[];
+  S.testing=true; render();
+  try{ const r=await httpsCallable(fns,"testPush")({uids}); const n=(r.data||{}).sent||0;
+    toast(n?`🧪 נשלחו ${n} התראות בדיקה`:"לא נמצא אף מכשיר עם התראות פעילות"); }
+  catch(e){ console.error(e); toast("השליחה נכשלה. האם העלית את השרת המעודכן?"); }
+  S.testing=false; render();
+}
+function contactsList(){
+  const m=new Map();
+  const add=(name,phone,src)=>{ const ph=normPhone(phone); if(!ph) return; const k=ph;
+    const cur=m.get(k); if(!cur || (!cur.name && name)) m.set(k,{name:name||"", phone:ph, src}); };
+  Object.entries(S.phones||{}).forEach(([uid,ph])=>{
+    const su=S.signups.find(s=>s.uid===uid && !s.guestOf);
+    add((S.whoMap||{})[uid] || (S.phoneNames||{})[uid] || (su&&su.name) || "", ph, "self");
+  });
+  S.ratings.forEach(r=>{ if(r.phone) add(r.n, r.phone, "roster"); });
+  return [...m.values()].sort((a,b)=>(a.name?0:1)-(b.name?0:1) || a.name.localeCompare(b.name,"he"));
+}
+function contactsCard(){
+  const list=contactsList();
+
+  const allText=list.map(c=>`${c.name||"ללא שם"}: ${prettyPhone(c.phone)}`).join("\n");
+  return h("div",{class:"card"},
+    h("h2",null,"📱 אנשי קשר",h("span",{class:"count"},list.length)),
+    h("div",{class:"hint"},"כל מי שמסר טלפון בהרשמה"+(S.isOwner?", וגם טלפונים שהוספת בלשונית שחקנים":"")+". רק מארגנים רואים את זה."),
+    list.length ? h("div",{class:"paylist"},list.map(c=>h("div",{class:"payrow"},
+      h("span",{class:"pn"},c.name||h("span",{style:"color:var(--muted);font-weight:400"},"ללא שם")),
+      h("a",{class:"ps",dir:"ltr",href:`tel:+${c.phone}`,style:"text-decoration:none"},prettyPhone(c.phone)),
+      h("a",{class:"ic",title:"וואטסאפ",href:`https://wa.me/${c.phone}`,target:"_blank",rel:"noopener",style:"text-decoration:none"},"💬")))) : h("div",{class:"empty"},"עוד אף אחד לא מסר טלפון."),
+    h("div",{class:"winlinks"},
+      list.length ? h("button",{class:"linkbtn",onclick:()=>copy(allText)},"📋 העתק את כל הרשימה") : null));
+}
+// settings as a grid of small tiles; tapping a tile opens its card in place
+function settingsSummary(title){
+  const c=S.cfg;
+  if(title.includes("הרשמה") && !title.includes("עדיפות")) return isOpen()?"פתוחה לכולם":isPrioOpen()?"🎟️ לקבועים":c.openAt&&c.openAt>Date.now()?`נפתחת ${fmtTime(c.openAt)}`:"סגורה";
+  if(title.includes("עדיפות")) return `${(c.priority||[]).length} קבועים`+((c.prioHours||0)?` · ${c.prioHours} ש׳ קודם`:"");
+  if(title.includes("מנהלים")) return `${(S.admins.emails||[]).length+1} מנהלים`;
+  if(title.includes("אנשי קשר")) return `${contactsList().length} טלפונים`;
+  if(title.includes("פרטי המשחק")) { const g=game(); return [g.day,g.time].filter(Boolean).join(" ")||"לא הוגדר"; }
+  if(title.includes("שחקנים ומכשירים")) return `${(S.phoneV||new Set()).size} מחוברים`+(S.isOwner&&S.tokens?` · ${pushPeople().on.length} מקבלים התראות`:"");
+  if(title.includes("יומן")) { const l=(S.pushLog||[])[0]; return l?`אחרונה ${fmtTime(l.at)}`:"אין עדיין"; }
+  if(title.includes("התחברות")) return `${(S.phoneV||new Set()).size} מחוברים`;
+  if(title.includes("מי מקבל")) return S.tokens?`${pushPeople().on.length} מכשירים`:"…";
+  if(title.includes("התראות")) return ({all:"לכולם",admin:"רק אני",select:"נבחרים"})[c.pushMode||"all"];
+  if(title.includes("ביטולים")) return ((c.lockHours||0)?`חסימה ${c.lockHours} ש׳`:"בלי חסימה")+(c.allowGuests===false?" · בלי אורחים":"");
+  if(title.includes("הגדרות המשחק")) return `${c.capacity} שחקנים · ${c.numTeams} קבוצות`;
+  if(title.includes("שבוע חדש")) return "איפוס הרשימה";
+  if(title.includes("סקר")) return surveyOpen()?`פתוח · ${(S.surveyResults&&S.surveyResults.round===S.survey.round&&S.surveyResults.voters)||0} הצביעו`:"דירוג אנונימי";
+  if(title.includes("לא ביחד")) return S.apart.length?`${S.apart.length} זוגות`:"אין זוגות";
+  return "";
+}
+function viewSettings(){
+  const cards=[].concat(settingsCards()).flat().filter(Boolean);
+  if(lsGet("settingsExpanded")) return cards;   // classic layout (debug)
+  const tiles=cards.map(card=>{
+    const h2=card.querySelector("h2"); if(!h2) return card;
+    const title=(h2.firstChild && h2.firstChild.nodeType===3 ? h2.firstChild.textContent : h2.textContent).trim();
+    const m=title.match(/^(\S+)\s+(.*)$/), icon=m?m[1]:"⚙️", name=m?m[2]:title;
+    if(S.setOpen===title){
+      card.classList.add("tile-open");
+      h2.classList.add("tile-head");
+      h2.append(h("span",{class:"chev"},"▲"));
+      h2.addEventListener("click",()=>{ S.setOpen=null; render(); });
+      return card;
+    }
+    return h("button",{class:"tile"+(title.includes("שבוע חדש")?" danger":""),onclick:()=>{ S.setOpen=title; render(); setTimeout(()=>{ const el=document.querySelector(".tile-open"); if(el) el.scrollIntoView({behavior:"smooth",block:"start"}); },30); }},
+      h("span",{class:"ticon"},icon), h("b",null,name), h("small",null,settingsSummary(title)));
+  });
+  return [h("div",{class:"tiles"},tiles)];
+}
+function adminsCard(){
+  const a=S.admins, list=a.emails||[];
+  const save=emails=>{ S.admins={...a, emails}; render(); run(()=>setDoc(ownerRef,{owner:a.owner||(auth.currentUser&&auth.currentUser.email)||"", emails},{merge:true}),"רשימת המנהלים עודכנה ✔"); };
+  const inp=h("input",{id:"f_adminEmail",type:"email",dir:"ltr",placeholder:"name@gmail.com",autocomplete:"off",value:S.draft.adminEmail??"",oninput:e=>{S.draft.adminEmail=e.target.value;}});
+  const add=()=>{ const v=String(inp.value||"").trim().toLowerCase();
+    if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)){ toast("כתובת מייל לא תקינה"); return; }
+    if(list.includes(v) || v===String(a.owner).toLowerCase()){ toast("כבר ברשימה"); return; }
+    delete S.draft.adminEmail; save(list.concat([v])); };
+  return h("div",{class:"card"},
+    h("h2",null,"👥 מנהלים",h("span",{class:"count"},`${list.length+1}`)),
+    h("div",{class:"hint"},"מנהלים נכנסים ב״כניסת מארגן״ עם חשבון הגוגל שלהם. הם יכולים לנהל רשימה, כוחות, תוצאות, תשלומים והגדרות, אבל לא רואים דירוגים, שוערים, טלפונים מהרשימה שלך או ״לא ביחד״, ולא יכולים להוסיף או להסיר מנהלים."),
+    h("div",{class:"payrow"},h("span",{class:"pn"},"👑 אתה"),h("span",{class:"ps",dir:"ltr"},a.owner||""),h("span",{style:"width:32px"})),
+    list.map(e=>h("div",{class:"payrow"},h("span",{class:"pn",dir:"ltr",style:"text-align:right"},e),h("span",{class:"ps"},"מנהל"),
+      h("button",{class:"ic x",title:"הסר",onclick:()=>save(list.filter(x=>x!==e))},"×"))),
+    h("div",{class:"addrow",style:"margin-top:10px"},inp,h("button",{class:"btn",onclick:add},"הוסף")));
+}
+function prioCard(){
+  const c=S.cfg, names=knownNames(), set=new Set(c.priority||[]);
+  const att=attendance(), pct=new Map(att.map(a=>[norm(a.name),a]));
+  return h("div",{class:"card"},
+    h("h2",null,"🎟️ עדיפות לקבועים",h("span",{class:"count"},`${set.size} קבועים`)),
+    h("div",{class:"hint"},"הקבועים יכולים להירשם לפני כולם. הבדיקה היא לפי השם, אז הם צריכים להירשם בדיוק בשם שמופיע כאן."),
+    h("div",{class:"sub-h"},"כמה זמן לפני הפתיחה לכולם?"),
+    h("div",{class:"chips"},[0,1,2,3,6,12,24].map(x=>h("button",{class:"chip"+((c.prioHours||0)===x?" on":""),onclick:()=>setCfg({prioHours:x})},x?`${x} ש׳`:"בלי"))),
+    !c.openAt && (c.prioHours||0)>0 ? h("div",{class:"hint"},"⚠️ זה עובד יחד עם ״פתיחה אוטומטית״. בלי פתיחה אוטומטית, אפשר לפתוח לקבועים ידנית עם הכפתור 🎟️ למעלה.") : null,
+    h("div",{class:"sub-h"},"מי הקבועים? (לחץ לסימון)"),
+    h("div",{class:"addrow",style:"margin-bottom:8px"},
+      h("input",{id:"f_prioName",type:"text",placeholder:"שם שלא מופיע ברשימה",autocomplete:"off",value:S.draft.prioName??"",oninput:e=>{S.draft.prioName=e.target.value;}}),
+      h("button",{class:"btn",onclick:()=>{ const n=clean(S.draft.prioName||""); if(!n){ toast("כתוב שם"); return; } delete S.draft.prioName; if(!set.has(norm(n))) togglePrio(n); else toast("כבר קבוע"); }},"הוסף")),
+    h("div",{class:"winlinks",style:"justify-content:flex-start;margin-bottom:4px"},
+      h("button",{class:"linkbtn",onclick:()=>{S.prioEdit=!S.prioEdit;render();}},S.prioEdit?"✔ סיום עריכה":"✏️ הסר שמות מהרשימה")),
+    names.length ? h("div",{class:"chips"},names.map(n=>{ const a=pct.get(norm(n));
+      if(S.prioEdit) return h("button",{class:"chip rm",onclick:()=>hideName(n)},"✕ "+n);
+      return h("button",{class:"chip"+(set.has(norm(n))?" on":""),onclick:()=>togglePrio(n)},(set.has(norm(n))?"🎟️ ":"")+n+(a&&a.weeks>=2?` · ${a.pct}%`:"")); })) : h("div",{class:"hint"},"אין עדיין שחקנים."),
+    S.prioEdit && (c.hiddenNames||[]).length ? h("div",null,
+      h("div",{class:"sub-h"},"מוסתרים (לחץ להחזיר)"),
+      h("div",{class:"chips"},(c.hiddenNames||[]).map(k=>h("button",{class:"chip",onclick:()=>setCfg({hiddenNames:(c.hiddenNames||[]).filter(x=>x!==k)},"השם הוחזר")},"↩ "+k)))) : null,
+    att.length ? h("button",{class:"linkbtn",onclick:()=>{ const top=att.filter(a=>a.weeks>=3&&a.pct>=75).map(a=>norm(a.name)); if(!top.length){ toast("אין עדיין מספיק נתוני נוכחות"); return; } setCfg({priority:[...new Set([...(c.priority||[]),...top])]},`סומנו ${top.length} שחקנים עם 75%+ נוכחות`); }},"✨ סמן אוטומטית את מי שמגיע 75%+ מהשבועות") : null);
+}
+const toLocalInput=ms=>{ const t=new Date(ms-new Date(ms).getTimezoneOffset()*60000); return t.toISOString().slice(0,16); };
+function settingsCards(){
+  const c=S.cfg, k=c.numTeams, cap=c.capacity, per=[...new Set(sizesFor(cap,k))].sort((a,b)=>b-a).join(" / ");
+  const g=game(), d=S.draft;
+  const field=(key,label,cur,attrs={})=>h("label",{class:"field"},h("span",null,label),
+    h("input",{id:"f_"+key,type:attrs.type||"text",value:d[key]??cur??"",placeholder:attrs.ph||"",inputmode:attrs.im||null,dir:attrs.dir||null,oninput:e=>{d[key]=e.target.value;}}));
+  const stepper=(lbl,sub,v,min,max,key)=>h("div",{class:"stepper"},
+    h("div",{class:"lbl"},h("b",null,lbl),h("small",null,sub)),
+    h("div",{class:"ctrl"},
+      h("button",{onclick:()=>v>min&&setCfg({[key]:v-1})},"−"),
+      h("output",null,v),
+      h("button",{onclick:()=>v<max&&setCfg({[key]:v+1})},"+")));
+  const open=isOpen(), future=c.openAt && c.openAt>Date.now();
+
+  return [
+    h("div",{class:"card"},
+      h("h2",null,"🔓 הרשמה"),
+      (()=>{ const prio=isPrioOpen(), pa=prioAt();
+        const st = open ? "פתוחה לכולם" : prio ? "🎟️ פתוחה לקבועים בלבד" : "סגורה";
+        const sub = open ? "כולם יכולים להירשם עכשיו" : prio ? (future?`לכולם: ${fmtFull(c.openAt)}`:"רק מי שברשימת הקבועים יכול להירשם")
+          : future ? (pa&&pa>Date.now()?`לקבועים: ${fmtFull(pa)} · לכולם: ${fmtFull(c.openAt)}`:`תיפתח אוטומטית ${fmtFull(c.openAt)}`) : "אף אחד לא יכול להירשם";
+        return h("div",null,
+          h("div",{class:"regstate"},h("b",null,`ההרשמה ${st}`),h("small",null,sub)),
+          h("div",{class:"seg3"},
+            h("button",{class:"btn "+(!open&&!prio?"on":"ghost"),onclick:()=>setCfg({open:false,prioOpen:false,openAt:null})},"🔒 סגור"),
+            h("button",{class:"btn "+(prio?"on":"ghost"),onclick:()=>{ if(!(c.priority||[]).length){ toast("קודם בחר קבועים בכרטיס ״עדיפות לקבועים״"); return; } setCfg({open:false,prioOpen:true,openAt:null},"🎟️ פתוח לקבועים בלבד"); }},"🎟️ קבועים"),
+            h("button",{class:"btn "+(open?"on":"ghost"),onclick:()=>setCfg({open:true,prioOpen:false,openAt:null},"🔓 פתוח לכולם")},"🔓 כולם"))); })(),
+      h("div",{class:"sub-h"},"⏰ פתיחה אוטומטית"),
+      h("div",{class:"hint"},"ההרשמה תיפתח לבד בזמן שתבחר. כשלוחצים ״פתח רשימה חדשה״ היא מתוזמנת אוטומטית לאותה שעה בשבוע הבא."),
+      h("div",{class:"addrow",style:"margin-top:8px"},
+        h("input",{id:"f_openAt",type:"datetime-local",value:d.openAt ?? (future?toLocalInput(c.openAt):""),oninput:e=>{d.openAt=e.target.value;}}),
+        h("button",{class:"btn",onclick:setAutoOpen},"קבע")),
+      future ? h("button",{class:"linkbtn",onclick:()=>setCfg({openAt:null},"הפתיחה האוטומטית בוטלה")},"בטל פתיחה אוטומטית") : null),
+    contactsCard(),
+    prioCard(),
+    S.isOwner ? adminsCard() : null,
+    S.isOwner ? surveyAdminCard() : null,
+    playersDevicesCard(),
+    apartCard(),
+    h("div",{class:"card"},
+      h("h2",null,"📍 פרטי המשחק"),
+      h("div",{class:"hint"},"יופיעו לכולם בראש הדף, וכפתורי הניווט בתחתית הרשימה."),
+      field("gameAt","מועד המשחק הקרוב",c.gameAt?toLocalInput(c.gameAt):"",{type:"datetime-local"}),
+      h("div",{class:"hint",style:"margin-top:4px"},"בלחיצה על ״פתח רשימה חדשה״ המועד עובר לשבוע הבא אוטומטית."),
+      field("gPlace","מקום",g.place,{ph:"למשל: מגרש בית ספר אורט, חולון"}),
+      h("button",{class:"btn full",style:"margin-top:10px",onclick:saveDetails},"💾 שמור פרטים")),
+    h("div",{class:"card"},
+      h("h2",null,"🔔 התראות לשחקנים"),
+      pushModeCard()),
+    h("div",{class:"card"},
+      h("h2",null,"🔒 ביטולים ואורחים"),
+      h("div",{class:"hint"}, c.gameAt ? "כמה שעות לפני המשחק שחקנים כבר לא יכולים לבטל לבד?" : "כדי לחסום ביטולים, קבע קודם מועד משחק בכרטיס ״פרטי המשחק״."),
+      h("div",{class:"chips"},[0,2,4,6,12,24].map(x=>h("button",{class:"chip"+((c.lockHours||0)===x?" on":""),onclick:()=>setCfg({lockHours:x})},x?`${x} שעות`:"בלי חסימה"))),
+      h("div",{class:"stepper",style:"margin-top:8px"},
+        h("div",{class:"lbl"},h("b",null,"אורחים (+1)"),h("small",null,c.allowGuests===false?"שחקנים לא יכולים להוסיף אורח":"כל שחקן רשום יכול להוסיף אורח אחד")),
+        h("button",{class:"btn "+(c.allowGuests===false?"":"ghost"),onclick:()=>setCfg({allowGuests:c.allowGuests===false})},c.allowGuests===false?"אפשר":"בטל"))),
+    h("div",{class:"card"},
+      h("h2",null,"⚙️ הגדרות המשחק"),
+      stepper("כמות שחקנים","מי שמעבר לזה נכנס להמתנה",cap,2,60,"capacity"),
+      stepper("כמות קבוצות",`${per} שחקנים בקבוצה`,k,2,8,"numTeams"),
+      h("div",{class:"chips"},[[18,3],[12,2],[15,3],[20,4]].map(([a,b])=>h("button",{class:"chip",onclick:()=>setCfg({capacity:a,numTeams:b})},`${a} · ${b} קבוצות`)))),
+    h("div",{class:"card"},
+      h("h2",null,"🗓️ שבוע חדש"),
+      h("div",{class:"hint"},"מוחק את הנרשמים, הכוחות וההצבעות. הדירוגים, הטבלה והפרטים נשמרים. תשלום שעוד לא כולם סימנו בו ממשיך כ״תשלום משבוע שעבר״ עד שכולם משלמים."),
+      h("button",{class:"btn warn full",style:"margin-top:12px",onclick:()=>{
+        if(!S.confirmReset){ S.confirmReset=true; render(); setTimeout(()=>{S.confirmReset=false;render();},4000); return; }
+        S.confirmReset=false; S.tab="list"; newWeek(); render();
+      }},S.confirmReset?"בטוח? לחץ שוב לאישור":"פתח רשימה חדשה"))
+  ];
+}
+
+window.addEventListener("hashchange",()=>{ const t=location.hash.slice(1); if(t==="teams"||t==="stats"){ S.tab=t; render(); } if(t==="survey"){ S.tab="list"; S.surveyOpenUI=true; render(); } });
+if(location.hash==="#survey"){ S.surveyOpenUI=true; }
+render();
