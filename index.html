@@ -1845,10 +1845,15 @@ function pushLogCard(){
 const loggedIn = () => !!S.authPhone;
 const needLogin = () => !loggedIn() && !S.isAdmin;
 let recaptcha=null, confirmation=null;
+// a fresh container every time: reCAPTCHA can't be rendered twice into the same element (e.g. after a failed try)
+function freshCaptchaEl(id){
+  const old=document.getElementById(id); if(old) old.remove();
+  const el=document.createElement("div"); el.id=id; document.body.appendChild(el);   // outside the app, so render() keeps it
+  return el;
+}
+function resetRecaptcha(){ try{ recaptcha&&recaptcha.clear(); }catch(_){} recaptcha=null; }
 function recaptchaBox(){
-  let el=document.getElementById("recap");
-  if(!el){ el=document.createElement("div"); el.id="recap"; document.body.appendChild(el); }   // outside the app, so render() keeps it
-  if(!recaptcha) recaptcha=new RecaptchaVerifier(auth, el, {size:"invisible"});
+  if(!recaptcha) recaptcha=new RecaptchaVerifier(auth, freshCaptchaEl("recap"+Date.now()), {size:"invisible"});
   return recaptcha;
 }
 const LOGIN_ERR = {"auth/invalid-phone-number":"מספר הטלפון לא תקין","auth/too-many-requests":"יותר מדי ניסיונות. נסה שוב בעוד כמה דקות","auth/invalid-verification-code":"הקוד לא נכון","auth/code-expired":"הקוד פג תוקף, שלח קוד חדש","auth/operation-not-allowed":"התחברות בטלפון עוד לא הופעלה. דבר עם המארגן","auth/quota-exceeded":"נגמרה מכסת ההודעות להיום. נסה מחר","auth/missing-phone-number":"כתוב מספר טלפון"};
@@ -1857,6 +1862,7 @@ async function sendCode(){
   if(!ph){ toast("כתוב מספר טלפון תקין"); return; }
   S.login={step:"phone", busy:true}; render();
   try{
+    resetRecaptcha();
     const v=recaptchaBox(), e164="+"+ph, u=auth.currentUser;
     // a phone that already has an account (e.g. logged in from Safari before) signs in to it;
     // a new phone is attached to this device's current account, so its sign-ups stay
@@ -1866,12 +1872,13 @@ async function sendCode(){
     lsSet("myPhone",ph); S.login={step:"code", phone:ph}; render();
     setTimeout(()=>{ const el=document.getElementById("f_code"); if(el) el.focus(); },50);
   }catch(e){
-    console.warn("login",e); try{ recaptcha&&recaptcha.clear(); }catch(_){} recaptcha=null;
+    console.warn("login",e); resetRecaptcha();
     S.login={step:"phone", err:String((e&&(e.code||e.message))||"")}; toast(LOGIN_ERR[e&&e.code]||"לא הצלחתי לשלוח קוד. נסה שוב"); render();
   }
 }
 async function sendCodeSignIn(){
   const ph=S.login.phone || normPhone(lsGet("myPhone"));
+  resetRecaptcha();
   try{ confirmation=await signInWithPhoneNumber(auth,"+"+ph,recaptchaBox()); S.login={step:"code", phone:ph}; delete S.draft.loginCode; render(); }
   catch(e){ console.warn("resend",e); S.login={step:"phone", err:String(e&&e.code||"")}; render(); }
 }
@@ -1963,9 +1970,7 @@ function saveWho(name){
 let proofAuth=null, proofCaptcha=null, proofConf=null;
 function proofSession(){
   if(!proofAuth) proofAuth=getAuth(initializeApp(firebaseConfig,"phoneproof"));
-  let el=document.getElementById("recap2");
-  if(!el){ el=document.createElement("div"); el.id="recap2"; document.body.appendChild(el); }
-  if(!proofCaptcha) proofCaptcha=new RecaptchaVerifier(proofAuth, el, {size:"invisible"});
+  if(!proofCaptcha) proofCaptcha=new RecaptchaVerifier(proofAuth, freshCaptchaEl("recap2_"+Date.now()), {size:"invisible"});
   return proofAuth;
 }
 async function adminSendCode(){
@@ -1973,6 +1978,7 @@ async function adminSendCode(){
   if(!ph){ toast("כתוב מספר טלפון תקין"); return; }
   S.admLink={step:"phone", busy:true}; render();
   try{
+    try{ proofCaptcha&&proofCaptcha.clear(); }catch(_){} proofCaptcha=null;
     const a=proofSession();
     proofConf=await signInWithPhoneNumber(a,"+"+ph,proofCaptcha);
     lsSet("myPhone",ph); S.admLink={step:"code", phone:ph}; render();
