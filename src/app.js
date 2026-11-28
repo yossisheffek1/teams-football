@@ -342,7 +342,7 @@ function votersBox(votes, col){
   const del=async it=>{ if(!confirm(`למחוק את ההצבעה של ${it.n||"מכשיר לא ידוע"}?`)) return; await run(()=>deleteDoc(doc(db,col||"votes",it.v.id)),"🗑️ ההצבעה נמחקה"); };
   return h("div",null,
     h("div",{class:"sub-h"},`✔ הצביעו (${votes.length})`),
-    items.length ? h("div",{class:"chips"},items.map(it=>h("button",{class:"chip on",onclick:()=>del(it)},it.n||`❔ לא ידוע ${++unk}`))) : h("div",{class:"hint"},"עוד אף אחד"),
+    items.length ? h("div",{class:"chips"},items.map(it=>h("button",{class:"chip on",onclick:()=>del(it)},(it.n||`❔ לא ידוע ${++unk}`)+(it.v.id.startsWith("p_")?" (ע״י מארגן)":"")))) : h("div",{class:"hint"},"עוד אף אחד"),
     unk ? h("div",{class:"hint",style:"margin-top:4px"},"❔ לא ידוע = מכשיר שלא התחבר ולא נרשם ממנו. אם נראה לך כפול, לחץ עליו כדי למחוק.") : (items.length?h("div",{class:"hint",style:"margin-top:4px"},"לחיצה על שם מוחקת את ההצבעה שלו."):null),
     not.length ? h("div",null,h("div",{class:"sub-h"},`⏳ ברשימה ועוד לא הצביעו (${not.length})`),h("div",{class:"chips"},not.map(n=>h("span",{class:"chip"},n)))) : null);
 }
@@ -355,7 +355,8 @@ function roundVotes(){
   for(const v of all){
     const n=norm(voteName(v)); const key=n||("#"+v.id);
     const prev=by.get(key);
-    if(!prev || (V.has(v.id) && !V.has(prev.id)) || v.id===S.uid) by.set(key,v);
+    const proxy=x=>x.id.startsWith("p_");
+    if(!prev || (proxy(prev) && !proxy(v)) || (!proxy(v) && ((V.has(v.id) && !V.has(prev.id)) || v.id===S.uid))) by.set(key,v);
   }
   return [...by.values()];
 }
@@ -2169,6 +2170,25 @@ function optionBlock(opt, idx, mode){
       h("button",{class:"btn full",style:"margin-top:8px",onclick:()=>setStatus("final",idx)}, S.teams.options.length>1?`✔ קבע את ${OPT_NAMES[idx]}`:"✔ קבע את החלוקה")) : null);
 }
 function needMyName(){ toast("כדי להצביע בשמך, חבר קודם את הטלפון שלך (כרטיס ״📱 חבר את הטלפון שלך״ ברשימה)"); S.admLinkLater=false; S.tab="list"; render(); window.scrollTo({top:0,behavior:"smooth"}); }
+// organizers vote for players who don't use the app
+const proxyId = name => "p_" + norm(name).replace(/[\/.#$\[\]\s]+/g,"_").slice(0,80);
+async function proxyVote(name, choice){
+  if(!S.teams || S.teams.status!=="voting") return;
+  S.proxyFor=null;
+  await run(()=>setDoc(doc(db,"votes",proxyId(name)),{choice, round:S.teams.at, name:clean(name), by:clean(lsGet("myName")||"מארגן")}), `✔ ${name} הצביע ל${OPT_NAMES[choice]}`);
+}
+function proxyVoteBox(v){
+  const voted=new Set(v.map(x=>norm(voteName(x))).filter(Boolean));
+  const left=S.signups.slice(0,S.cfg.capacity).filter(s=>!voted.has(norm(s.name))).map(s=>s.name);
+  if(!left.length) return null;
+  const sel=S.proxyFor;
+  return h("div",null,
+    h("div",{class:"sub-h"},"🙋 הצבעה בשם שחקן"),
+    h("div",{class:"hint"},"לשחקן שלא נכנס לאפליקציה: לחץ על השם ובחר בשבילו. אם הוא יצביע בעצמו אחר כך – ההצבעה שלו תחליף את שלך."),
+    h("div",{class:"chips"},left.map(n=>h("button",{class:"chip"+(sel===n?" on":""),onclick:()=>{ S.proxyFor = sel===n?null:n; render(); }},n))),
+    sel ? h("div",{class:"addrow",style:"margin-top:8px"},
+      S.teams.options.map((o,i)=>h("button",{class:"btn",onclick:()=>proxyVote(sel,i)},`${sel}: ${OPT_NAMES[i]}`))) : null);
+}
 function adminVote(idx){
   if(!lsGet("myName")) return needMyName();
   vote(idx);
@@ -2335,6 +2355,7 @@ function viewTeams(){
     if(S.isAdmin) out.push(h("div",{class:"card"},
       h("h2",null,"🗳️ ניהול ההצבעה"),
       votersBox(v),
+      proxyVoteBox(v),
       h("div",{class:"hint"},"1. שלח לקבוצה תמונה של שתי האופציות:"),
       imageShare("vote", null),
       h("div",{class:"hint",style:"margin-top:12px"},"2. שלח את הקישור להצבעה:"),

@@ -264,6 +264,13 @@ service cloud.firestore {
         && request.resource.data.round is number
         && loginOk()
         && votingOpen();
+      // an organizer votes for a player who doesn't use the app (ids "p_<name>")
+      allow create, update: if isAdmin() && id.matches('p_.+')
+        && request.resource.data.keys().hasOnly(['choice', 'round', 'name', 'by'])
+        && request.resource.data.choice in [0, 1]
+        && request.resource.data.round is number
+        && validName(request.resource.data)
+        && votingOpen();
       allow delete: if isAdmin();
     }
 
