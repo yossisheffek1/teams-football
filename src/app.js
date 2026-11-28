@@ -331,9 +331,11 @@ function nameOfUid(uid){
   const t=(S.tokens||[]).find(x=>x.uid===uid && x.name); if(t) return t.name;
   return "";
 }
+// the name on a vote: saved with the vote (so every player sees it), or looked up for older votes
+const voteName = v => (v && v.name) || nameOfUid(v.id);
 function votersBox(votes, col){
   // organizers can delete a vote (tap a name), e.g. a duplicate or an unknown device
-  const items=votes.map(v=>({v, n:nameOfUid(v.id)})).sort((a,b)=>(a.n||"תתת").localeCompare(b.n||"תתת","he"));
+  const items=votes.map(v=>({v, n:col==="mvpVotes"?nameOfUid(v.id):voteName(v)})).sort((a,b)=>(a.n||"תתת").localeCompare(b.n||"תתת","he"));
   const ks=new Set(items.filter(x=>x.n).map(x=>norm(x.n)));
   const not=S.signups.slice(0,S.cfg.capacity).filter(s=>!ks.has(norm(s.name))).map(s=>s.name);
   let unk=0;
@@ -351,7 +353,7 @@ function roundVotes(){
   // Keep the vote of his logged-in account; organizers see names, players fall back to their sign-ups.
   const by=new Map(), V=S.phoneV||new Set();
   for(const v of all){
-    const n=norm(nameOfUid(v.id)); const key=n||("#"+v.id);
+    const n=norm(voteName(v)); const key=n||("#"+v.id);
     const prev=by.get(key);
     if(!prev || (V.has(v.id) && !V.has(prev.id)) || v.id===S.uid) by.set(key,v);
   }
@@ -361,7 +363,10 @@ function myVote(){ const v=S.teams && S.votes.find(v=>v.id===S.uid && v.round===
 async function vote(choice){
   if(!S.teams || S.teams.status!=="voting" || !S.uid) return;
   if(needLogin()) return loginNeededToast();
-  await run(()=>setDoc(doc(db,"votes",S.uid), {choice, round:S.teams.at}), `הצבעת ל${OPT_NAMES[choice]} ✔`);
+  const name=clean(lsGet("myName")||nameOfUid(S.uid)||"");
+  const ref=doc(db,"votes",S.uid), base={choice, round:S.teams.at};
+  // if the saved name doesn't match the account's name (e.g. an organizer corrected it), vote without it
+  await run(()=>(name ? setDoc(ref,{...base, name}) : Promise.reject(0)).catch(()=>setDoc(ref,base)), `הצבעת ל${OPT_NAMES[choice]} ✔`);
 }
 
 // ---------- admin actions ----------
@@ -2149,6 +2154,9 @@ function optionBlock(opt, idx, mode){
       voting ? h("span",{class:"vcount"},cnt===1?"קול אחד":`${cnt} קולות`) : null) : null,
     bad ? h("div",{class:"stale",style:"margin-top:6px"},`⚠️ ${bad} זוגות ״לא ביחד״ באותה קבוצה`) : null,
     voting && total ? h("div",{class:"vbar"},h("i",{style:`width:${cnt/total*100}%`})) : null,
+    // everyone sees who voted for this option
+    voting && cnt ? (()=>{ let unk=0; const ns=v.filter(x=>x.choice===idx).map(x=>voteName(x)).sort((a,b)=>(a||"תתת").localeCompare(b||"תתת","he"));
+      return h("div",{class:"chips voters"},h("span",{class:"vlabel"},"הצביעו:"),ns.map(n=>h("span",{class:"chip"},n||`לא ידוע ${++unk}`))); })() : null,
     S.isAdmin ? swapHint(idx) : null,
     h("div",{class:"teams"},opt.teams.map((tm,i)=>teamCard(tm,i,S.isOwner,opt,idx))),
     mode==="vote" ? h("button",{class:"btn full big"+(mine?" chosen":""),style:"margin-top:10px",onclick:()=>vote(idx)}, mine?`✔ הצבעת ל${OPT_NAMES[idx]}`:`אני בעד ${OPT_NAMES[idx]}`) : null,

@@ -359,3 +359,7 @@
   .stats-t td.tn.click{cursor:pointer;text-decoration:underline dotted}
   .stats-t td.tn.sel{color:var(--wait)}
   .stats-t th.thwrap{white-space:normal;line-height:1.15;font-size:12px;max-width:58px}
+
+  .chips.voters{margin-top:8px}
+  .chips.voters .chip{font-size:13px;padding:4px 10px}
+  .chips.voters .vlabel{font-size:13px;color:var(--muted);align-self:center}

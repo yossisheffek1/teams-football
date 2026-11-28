@@ -255,8 +255,12 @@ service cloud.firestore {
       allow read: if true;
       allow create, update: if request.auth != null
         && id == request.auth.uid
-        && request.resource.data.keys().hasOnly(['choice', 'round'])
+        && request.resource.data.keys().hasOnly(['choice', 'round', 'name'])
         && request.resource.data.choice in [0, 1]
+        // the voter's name is shown to everyone: it must be his own name (as saved for his account)
+        && (!('name' in request.resource.data) || (request.resource.data.name is string && request.resource.data.name.size() <= 40
+            && (!exists(/databases/$(database)/documents/who/$(request.auth.uid))
+                || get(/databases/$(database)/documents/who/$(request.auth.uid)).data.name == request.resource.data.name)))
         && request.resource.data.round is number
         && loginOk()
         && votingOpen();
