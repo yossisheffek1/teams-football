@@ -570,6 +570,7 @@ async function checkAdmin(user){
     if(S.isOwner){
       lsSet("ownerDevice","1");   // this device belongs to the main admin: show him the account switcher
       onSnapshot(query(collection(db,"pushLog"),orderBy("at","desc"),limit(25)), q=>{ S.pushLog=q.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>b.at-a.at); render(); }, e=>console.warn("pushLog",e));
+      onSnapshot(collection(db,"loginRequests"), q=>{ S.loginReqs=q.docs.map(d=>({uid:d.id,...d.data()})).filter(x=>x.status==="pending").sort((a,b)=>a.at-b.at); render(); }, e=>console.warn("loginRequests",e));
       onSnapshot(query(collection(db,"loginErrors"),orderBy("at","desc"),limit(40)), q=>{ S.loginErrors=q.docs.map(d=>d.data()).filter(x=>x.at>Date.now()-7*86400000).sort((a,b)=>b.at-a.at); render(); }, ()=>{});
       onSnapshot(collection(db,"tokens"), q=>{ S.tokens=q.docs.filter(d=>d.data().token).map(d=>({uid:d.id, name:d.data().name||"", at:d.data().at})); migrateNames(); render(); }, ()=>{});
       onSnapshot(surveyResRef, s=>{ S.surveyResults = s.exists()?s.data():null; render(); }, ()=>{});
@@ -598,6 +599,7 @@ onAuthStateChanged(auth, async user=>{
   if(!user){ try{ await signInAnonymously(auth); }catch(e){ fail(e); } return; }
   const first=!S.uid; S.uid = user.uid; S.authPhone = user.phoneNumber || null;
   if(S.authPhone && !lsGet("myName")) identifyMe();
+  listenMyLoginRequest();
   getDoc(doc(db,"who",user.uid)).then(d=>{ const n=d.exists()&&d.data().name; if(n && n!==lsGet("myName")){ lsSet("myName",n); render(); } }).catch(()=>{});
   if(first){ initPush(); }
   getDoc(doc(db,"surveyVotes",user.uid)).then(d=>{ S.myVote = d.exists()?d.data():null; render(); }).catch(()=>{});
@@ -1949,10 +1951,94 @@ function namePicker(onPick){
       h("input",{id:"f_whoOther",type:"text",placeholder:"לא ברשימה? כתוב שם ושם משפחה",value:S.draft.whoOtherName||"",oninput:e=>{S.draft.whoOtherName=e.target.value;}}),
       h("button",{class:"btn",onclick:()=>onPick(S.draft.whoOtherName||"")},"שמור")));
 }
+// ---------- login without SMS: ask the main organizer to approve this device ----------
+// For players whose number Google blocks (error -39). The owner gets a notification and approves;
+// the server then puts the phone on this device's account, exactly as if the SMS code was typed.
+let myReqUnsub=null;
+function listenMyLoginRequest(){
+  if(myReqUnsub){ myReqUnsub(); myReqUnsub=null; }
+  if(!S.uid || S.authPhone) { S.myReq=null; return; }
+  myReqUnsub=onSnapshot(doc(db,"loginRequests",S.uid), d=>{
+    S.myReq = d.exists() ? d.data() : null;
+    if(S.myReq && S.myReq.status==="ok" && !S.authPhone) finishApproved();
+    render();
+  }, ()=>{});
+}
+let finishing=false;
+async function finishApproved(){
+  if(finishing) return; finishing=true;
+  try{
+    await auth.currentUser.reload();
+    await auth.currentUser.getIdToken(true);   // the new token carries the phone, so the rules let him in
+    S.authPhone = auth.currentUser.phoneNumber || null;
+    if(!S.authPhone){ finishing=false; return; }
+    lsSet("myPhone", normPhone(S.authPhone));
+    const name = (await identifyMe()) || (S.myReq && S.myReq.name);
+    if(name){ lsSet("myName",name); lsSet("whoDone","1"); }
+    deleteDoc(doc(db,"loginRequests",S.uid)).catch(()=>{});
+    toast(`✔ המארגן אישר. שלום ${name||""}!`); setTimeout(()=>location.reload(),1200);
+  }catch(e){ console.warn("approved",e); finishing=false; }
+}
+async function sendLoginRequest(name){
+  name=clean(name); if(!name){ toast("בחר או כתוב את השם שלך"); return; }
+  const ph=normPhone(S.draft.reqPh ?? S.draft.loginPh ?? lsGet("myPhone"));
+  if(!ph){ toast("כתוב את מספר הטלפון שלך"); return; }
+  try{
+    await setDoc(doc(db,"loginRequests",S.uid),{name, phone:ph, at:Date.now(), app:isStandalone()?"icon":"browser", ua:navigator.userAgent.slice(0,200), status:"pending"});
+    lsSet("myPhone",ph); S.login={step:"phone"}; toast("✔ הבקשה נשלחה למארגן"); render();
+  }catch(e){ console.warn("loginRequest",e); toast("לא הצלחתי לשלוח את הבקשה. נסה שוב"); }
+}
+async function cancelLoginRequest(){ try{ await deleteDoc(doc(db,"loginRequests",S.uid)); }catch(_){} S.login={step:"phone"}; render(); }
+function loginRequestView(){
+  const R=S.myReq;
+  if(R && R.status==="pending") return h("div",{class:"card surv login"},
+    h("h2",null,"⏳ מחכה לאישור המארגן"),
+    h("div",{class:"hint"},`שלחת בקשה בשם ${R.name} (${prettyPhone(normPhone(R.phone))}). ברגע שהמארגן יאשר, תתחבר כאן אוטומטית. אפשר לסגור את האפליקציה בינתיים.`),
+    h("button",{class:"linkbtn muted",onclick:cancelLoginRequest},"ביטול הבקשה"));
+  if(R && R.status==="no") return h("div",{class:"card surv login"},
+    h("h2",null,"הבקשה לא אושרה"),
+    h("div",{class:"hint"},"המארגן לא אישר את הבקשה. אם זו טעות, דבר איתו ושלח שוב."),
+    h("button",{class:"btn ghost",onclick:cancelLoginRequest},"נסה שוב"));
+  return null;
+}
+function askApprovalView(){
+  return h("div",{class:"card surv login"},
+    h("h2",null,"🙋 כניסה באישור המארגן"),
+    h("div",{class:"hint"},"לא מגיע קוד SMS? המארגן יאשר אותך ידנית. כתוב את המספר שלך ולחץ על השם שלך – הבקשה תישלח אליו."),
+    h("div",{class:"addrow"},
+      h("input",{id:"f_reqPh",type:"tel",inputmode:"tel",dir:"ltr",placeholder:"050-0000000",value:S.draft.reqPh ?? S.draft.loginPh ?? prettyPhone(lsGet("myPhone")),oninput:e=>{S.draft.reqPh=e.target.value;}})),
+    namePicker(sendLoginRequest),
+    h("button",{class:"linkbtn muted",onclick:()=>{ S.login={step:"phone"}; render(); }},"חזרה להתחברות עם קוד"));
+}
+// the owner's list of devices waiting for approval
+function loginRequestsCard(){
+  const L=S.loginReqs||[]; if(!S.isOwner || !L.length) return null;
+  return h("div",{class:"card surv"},
+    h("h2",null,"🔐 מחכים לאישור התחברות",h("span",{class:"count"},String(L.length))),
+    h("div",{class:"hint"},"שחקנים שלא מקבלים קוד SMS. אשר רק מי שאתה מכיר את המספר שלו – אחרי האישור הוא מחובר כאילו הקליד את הקוד."),
+    L.map(r=>h("div",{class:"row"},
+      h("div",{class:"nm"},r.name,h("small",{dir:"ltr",style:"display:block;text-align:right"},`${prettyPhone(normPhone(r.phone))} · ${r.app==="icon"?"אייקון":"דפדפן"} · ${fmtTime(r.at)}`)),
+      h("button",{class:"btn",disabled:!!(S.reqBusy&&S.reqBusy[r.uid]),onclick:()=>approveLogin(r)},S.reqBusy&&S.reqBusy[r.uid]?"…":"אשר"),
+      h("button",{class:"btn ghost",onclick:()=>rejectLogin(r)},"דחה"))));
+}
+async function approveLogin(r){
+  S.reqBusy={...(S.reqBusy||{}),[r.uid]:true}; render();
+  try{ const res=await httpsCallable(fns,"approveLogin")({uid:r.uid}); toast(`✔ ${(res&&res.data&&res.data.name)||r.name} מחובר`); }
+  catch(e){
+    console.warn("approve",e);
+    const m=String(e&&e.message||"");
+    toast(m.includes("organizer") ? "המספר הזה שייך לחשבון של מארגן – אי אפשר לאשר אותו כך" : "האישור נכשל. נסה שוב");
+  }
+  finally{ if(S.reqBusy) delete S.reqBusy[r.uid]; render(); }
+}
+async function rejectLogin(r){
+  try{ await updateDoc(doc(db,"loginRequests",r.uid),{status:"no"}); toast("הבקשה נדחתה"); }catch(e){ toast("לא הצלחתי לדחות"); }
+}
 function loginCard(reason){
   if(S.isAdmin) return null;
   if(loggedIn() && lsGet("myName")) return null;
   const L=S.login||{step:"phone"};
+  if(!loggedIn()){ const rv=loginRequestView(); if(rv) return rv; if(L.step==="ask") return askApprovalView(); }
   if(loggedIn() || L.step==="name") return h("div",{class:"card surv login"},
     h("h2",null,"👋 איך קוראים לך?"),
     h("div",{class:"hint"},"בחר את השם שלך כמו שהוא מופיע בקבוצה. זה נעשה פעם אחת."),
@@ -1971,6 +2057,7 @@ function loginCard(reason){
           h("input",{id:"f_loginPh",type:"tel",inputmode:"tel",autocomplete:"tel",dir:"ltr",placeholder:"050-0000000",value:S.draft.loginPh ?? prettyPhone(lsGet("myPhone")),oninput:e=>{S.draft.loginPh=e.target.value;},onkeydown:e=>{ if(e.key==="Enter") sendCode(); }}),
           h("button",{class:"btn",disabled:!!L.busy,onclick:sendCode},L.busy?"…":"שלח קוד")),
     L.err ? h("div",{class:"hint",style:"direction:ltr;text-align:left;font-size:11px;opacity:.7"},L.err) : null,
+    h("button",{class:"linkbtn",style:"display:block",onclick:()=>{ S.login={step:"ask"}; render(); }}, L.err ? "לא מצליח לקבל קוד? בקש מהמארגן לאשר אותך" : "לא מגיע קוד? כניסה באישור המארגן"),
     L.step!=="code" ? h("button",{class:"linkbtn muted",onclick:()=>{ S.loginLater=true; render(); }},"אחר כך") : null);
 }
 function loginNeededToast(){ toast("קודם התחבר עם הטלפון (למעלה)"); S.loginLater=false; S.tab="list"; render(); window.scrollTo({top:0,behavior:"smooth"}); }
@@ -2039,7 +2126,7 @@ function adminPhoneCard(){
 
 // the "who are you / log in" card at the top of the list (and of the teams tab during a vote)
 function whoCard(){
-  if(S.isAdmin) return S.admLinkLater ? null : adminPhoneCard();
+  if(S.isAdmin) return [loginRequestsCard(), S.admLinkLater ? null : adminPhoneCard()];
   if(!S.isAdmin && S.cfgLoaded && S.uid && !S.surveyOpenUI && (!loggedIn() || !lsGet("myName")) && !S.loginLater) return loginCard();
   return null;
 }

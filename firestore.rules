@@ -183,6 +183,19 @@ service cloud.firestore {
         && request.resource.data.ua is string && request.resource.data.ua.size() <= 200
         && request.resource.data.ph is string && request.resource.data.ph.size() <= 4;
     }
+    // "let me in without SMS": a player whose SMS codes are blocked asks the owner to approve this device.
+    // The player writes only his own pending request; approving is done by the server (approveLogin).
+    match /loginRequests/{id} {
+      allow read: if isOwner() || (request.auth != null && id == request.auth.uid);
+      allow create, update: if request.auth != null && id == request.auth.uid
+        && request.resource.data.keys().hasOnly(['name', 'phone', 'at', 'app', 'ua', 'status'])
+        && request.resource.data.status == 'pending'
+        && request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 40
+        && request.resource.data.phone is string && request.resource.data.phone.size() <= 20
+        && request.resource.data.ua is string && request.resource.data.ua.size() <= 200;
+      allow update: if isOwner() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']) && request.resource.data.status == 'no';
+      allow delete: if isOwner() || (request.auth != null && id == request.auth.uid);
+    }
     // notification delivery log: written by the server, only the owner reads it
     match /pushLog/{id} {
       allow read: if isOwner();

@@ -643,6 +643,23 @@ exports.phoneStatus = onCall(async (req) => {
   catch (e) { return { exists: false }; }
 });
 
+// move a player's things from one account to another, then remove the old account's device docs
+// (used when a phone moves to another account: an organizer's Google account, or a device the owner approved)
+async function moveAccount(other, me) {
+  // sign-ups, votes, payment marks and the name; the old account's device docs are removed
+  const moves = [["who", other, me], ["votes", other, me], ["mvpVotes", other, me], ["surveyVotes", other, me], ["payMarks", other, me]];
+  for (const [col, from, to] of moves) {
+    const a = await db.doc(`${col}/${from}`).get();
+    if (a.exists) { const b = await db.doc(`${col}/${to}`).get(); if (!b.exists) await db.doc(`${col}/${to}`).set(a.data()); await a.ref.delete(); }
+  }
+  const su = await db.doc(`signups/${other}`).get();
+  if (su.exists && !(await db.doc(`signups/${me}`).get()).exists) { await db.doc(`signups/${me}`).set({ ...su.data(), uid: me }); await su.ref.delete(); }
+  const g = await db.doc(`signups/${other}_g`).get();
+  if (g.exists && !(await db.doc(`signups/${me}_g`).get()).exists) { await db.doc(`signups/${me}_g`).set({ ...g.data(), uid: me, guestOf: me }); await g.ref.delete(); }
+  await db.doc(`phones/${other}`).delete().catch(() => {});
+  await db.doc(`tokens/${other}`).delete().catch(() => {});
+}
+
 // ---------- organizer: put his SMS-verified phone on his Google account ----------
 // "proof" is the ID token of a phone sign-in the organizer just did (SMS code), which shows he owns the number.
 // If that number already had its own player account, its data moves to the organizer's account and it is removed.
@@ -658,18 +675,7 @@ exports.adoptPhone = onCall(async (req) => {
   if (other !== me) {
     const ou = await getAuth().getUser(other);
     if ((ou.providerData || []).some((p) => p.providerId !== "phone")) throw new HttpsError("failed-precondition", "phone belongs to another organizer account");
-    // move the player's things from the phone-only account to the organizer's
-    const moves = [["who", other, me], ["votes", other, me], ["mvpVotes", other, me], ["surveyVotes", other, me], ["payMarks", other, me]];
-    for (const [col, from, to] of moves) {
-      const a = await db.doc(`${col}/${from}`).get();
-      if (a.exists) { const b = await db.doc(`${col}/${to}`).get(); if (!b.exists) await db.doc(`${col}/${to}`).set(a.data()); await a.ref.delete(); }
-    }
-    const su = await db.doc(`signups/${other}`).get();
-    if (su.exists && !(await db.doc(`signups/${me}`).get()).exists) { await db.doc(`signups/${me}`).set({ ...su.data(), uid: me }); await su.ref.delete(); }
-    const g = await db.doc(`signups/${other}_g`).get();
-    if (g.exists && !(await db.doc(`signups/${me}_g`).get()).exists) { await db.doc(`signups/${me}_g`).set({ ...g.data(), uid: me, guestOf: me }); await g.ref.delete(); }
-    await db.doc(`phones/${other}`).delete().catch(() => {});
-    await db.doc(`tokens/${other}`).delete().catch(() => {});
+    await moveAccount(other, me);
     await getAuth().deleteUser(other);
   }
   await getAuth().updateUser(me, { phoneNumber: e164 });
@@ -732,4 +738,62 @@ exports.onMvpVote = onDocumentWritten("mvpVotes/{id}", async () => {
   const counts = {}, voters = [];
   snap.docs.forEach((d) => { const n = d.data().name; if (typeof n !== "string") return; counts[n] = (counts[n] || 0) + 1; voters.push(d.id); });
   await db.doc("state/mvpTally").set({ round, counts, voters, at: Date.now() });
+});
+
+// ---------- login without SMS: the owner approves a device ----------
+// When Google blocks a number's SMS codes (error -39), the player asks the main organizer to let him in.
+// The request (name + phone) is in loginRequests/{uid}; only the owner can approve it. Approving puts the phone
+// on the device's account, exactly as if the player had typed the SMS code.
+async function isMainOwner(req) {
+  const email = req.auth && req.auth.token && req.auth.token.email_verified && String(req.auth.token.email || "").toLowerCase();
+  const owner = await ownerEmail();
+  return !!email && !!owner && email === owner;
+}
+exports.approveLogin = onCall(async (req) => {
+  if (!(await isMainOwner(req))) throw new HttpsError("permission-denied", "only the main organizer approves logins");
+  const uid = String((req.data && req.data.uid) || "");
+  if (!uid) throw new HttpsError("invalid-argument", "no uid");
+  const rref = db.doc(`loginRequests/${uid}`);
+  const r = await rref.get();
+  if (!r.exists) throw new HttpsError("not-found", "no request");
+  const R = r.data();
+  const phone = normPhoneIL(R.phone);
+  if (!/^\d{9,15}$/.test(phone)) throw new HttpsError("invalid-argument", "bad phone");
+  const e164 = "+" + phone;
+  const user = await getAuth().getUser(uid).catch(() => null);
+  if (!user) { await rref.delete(); throw new HttpsError("not-found", "the device's account no longer exists"); }
+  if (user.phoneNumber !== e164) {
+    try { await getAuth().updateUser(uid, { phoneNumber: e164 }); }
+    catch (e) {
+      if (!String(e.code || "").includes("phone-number-already-exists")) throw e;
+      // the number already has an account (the player logged in once on another device):
+      // that account's sign-ups and votes move here, and the number moves to this device
+      const other = await getAuth().getUserByPhoneNumber(e164);
+      if ((other.providerData || []).some((p) => p.providerId !== "phone")) throw new HttpsError("failed-precondition", "this phone is on an organizer's account");
+      await moveAccount(other.uid, uid);
+      await getAuth().deleteUser(other.uid);
+      await getAuth().updateUser(uid, { phoneNumber: e164 });
+    }
+  }
+  let name = "";
+  const rd = await db.doc("ratings/main").get();
+  const hit = ((rd.exists && rd.data().list) || []).find((x) => x && x.phone && normPhoneIL(x.phone) === phone);
+  if (hit) name = hit.n;
+  if (!name) name = String(R.name || "").trim().slice(0, 40);
+  await db.doc(`phones/${uid}`).set({ phone, v: true }, { merge: true });
+  if (name) await db.doc(`who/${uid}`).set({ name, at: Date.now() });
+  await rref.set({ status: "ok", doneAt: Date.now() }, { merge: true });
+  return { name };
+});
+// tell the owner's phones that someone is waiting
+exports.onLoginRequest = onDocumentWritten("loginRequests/{id}", async (event) => {
+  const after = event.data.after.exists ? event.data.after.data() : null;
+  const before = event.data.before.exists ? event.data.before.data() : null;
+  if (!after || after.status !== "pending" || (before && before.status === "pending")) return;
+  const devs = await adminDevs();
+  const toks = await deviceTokens(await ownerEmail());
+  const ph = normPhoneIL(after.phone);
+  const pretty = ph.startsWith("972") ? "0" + ph.slice(3) : ph;
+  const msgs = toks.map((t) => ({ ...adminTarget(t, devs), title: "🔐 בקשת התחברות", body: `${after.name || "שחקן"} (${pretty}) לא מקבל קוד SMS ומבקש שתאשר אותו` }));
+  if (msgs.length) await deliver(msgs);
 });
